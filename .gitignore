@@ -1,0 +1,21 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build/
+xposed/build/
+build/
+
+# 发布签名（不入库）
+keystore.properties
+keystore/*.jks
+*.jks
+
+# 构建产物（安装包走 Releases，不入库）
+/dist/
