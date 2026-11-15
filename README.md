@@ -1,5 +1,10 @@
 # 浏览器下载接管 · DownloadGuard
 
+[![Release](https://img.shields.io/github/v/release/zhaofan128/download-guard?label=release&color=2ea44f)](https://github.com/zhaofan128/download-guard/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84.svg)](https://developer.android.com)
+[![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
+
 一个不需要 root 的 Android 下载工具：**把浏览器里点不动的下载按钮接过来**，用 48 连接把文件拉快，下完再逐字节校验，确认没坏才交给你。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过。这三件事，它一起解决。
@@ -8,6 +13,12 @@
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
 - 30 个 JVM 单元测试，覆盖分块调度器的并发一致性与真实 APK 的 v2 签名摘要重算
+
+## 下载
+
+**[⬇ 下载最新版 APK](https://github.com/zhaofan128/download-guard/releases/latest)**
+
+下载后直接安装。首次启动会引导授予「所有文件访问权限」与「通知权限」，之后把链接粘进来就能用。
 
 ---
 
@@ -20,6 +31,19 @@
 | 浏览器单线程下载，大文件几百 KB/s | 48 条独立 TCP + 块级调度 + 工作窃取，尾段不再掉速 |
 | 下完的 APK 装不上，才知道包是坏的 | 下载完成立即做五级校验，坏了自动隔离并给出重下入口 |
 | 手机厂商的「安装前安全检测」把第三方 APK 判成「已损坏」 | 标准系统安装器路径 + 权限引导；被 ROM 拦死时可选用 Shizuku 直装 |
+
+---
+
+## 特点
+
+| 特点 | 具体是什么 |
+| --- | --- |
+| **零特权** | 全部功能在普通应用权限内完成，不需要 root、不需要 Xposed、不需要 Shizuku。后者只是可选加速项 |
+| **下载与校验一体** | 市面上的多线程下载器大多只管拉快，不管拉对。这里的每次下载都会走完五级校验，出问题立刻告诉你哪一级没过 |
+| **不谎报结果** | 拿不到文件长度就降级流式下载并显式标注，而不是假装在算进度；校验没跑成就报「未校验」，不会写成「通过」 |
+| **嗅探带登录态** | 抓到直链的同时把 `Referer` 和 `Cookie` 一起交给下载器，防盗链站点不会一换 UA 就 403 |
+| **绝不删你的文件** | 判定损坏只做「移动到隔离区」，原文件名、时间戳、目录结构全部保留，随时可以拿回来 |
+| **开源可自建** | MIT 协议，签名密钥不入库，任何人 clone 下来都能编译出可用的包 |
 
 ---
 
@@ -102,8 +126,8 @@
 ## 构建
 
 ```bash
-git clone <this-repo>
-cd DownloadGuard
+git clone https://github.com/zhaofan128/download-guard.git
+cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
 ./gradlew :app:testDebugUnitTest      # 30 个单元测试
