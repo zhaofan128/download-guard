@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="下载卫士增强"
+        android:supportsRtl="true">
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="在 DownloadManager 登记完成下载与浏览器下载完成回调之前，插入安装包 EOCD/CRC 完整性校验" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="93" />
+    </application>
+
+</manifest>

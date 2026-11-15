@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="database" path="guard.db" />
+    <include domain="sharedpref" path="." />
+    <exclude domain="file" path="quarantine" />
+    <exclude domain="external" path="quarantine" />
+</full-backup-content>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">浏览器下载接管</string>
+    <string name="app_desc">安装包下载完整性守护</string>
+    <string name="accessibility_service_summary">浏览器安装包链接抓取</string>
+    <string name="accessibility_service_desc">监听浏览器网页链接的点击与长按，识别 .apk/.apks/.xapk 安装包直链后提示用浏览器下载接管加速下载。本服务只读取链接文本，不收集浏览记录，不上传任何数据。</string>
+</resources>

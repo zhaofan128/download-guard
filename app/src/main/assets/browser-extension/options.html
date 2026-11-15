@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>DownloadGuard 下载桥设置</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #0b1220; color: #e2e8f0; margin: 0; padding: 18px; width: 340px;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px; }
+    p.sub { font-size: 12px; color: #94a3b8; margin: 0 0 14px; }
+    label { display: block; font-size: 12px; color: #cbd5e1; margin: 12px 0 4px; }
+    input {
+      width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 10px;
+      border: 1px solid #334155; background: #111a2e; color: #e2e8f0; font-size: 13px;
+    }
+    button {
+      margin-top: 14px; width: 100%; padding: 10px; border: 0; border-radius: 10px;
+      background: #38bdf8; color: #06121f; font-weight: 600; font-size: 13px; cursor: pointer;
+    }
+    button.ghost { background: #1e293b; color: #e2e8f0; margin-top: 8px; }
+    #status { margin-top: 10px; font-size: 12px; min-height: 16px; color: #7dd3fc; }
+    .hint { margin-top: 14px; font-size: 11px; color: #64748b; line-height: 1.6; }
+    code { color: #7dd3fc; }
+  </style>
+</head>
+<body>
+  <h1>🌉 DownloadGuard 下载桥</h1>
+  <p class="sub">浏览器下载 → 手机 48 线程引擎加速 + 完整性校验</p>
+
+  <label>手机服务地址（手机 DownloadGuard → 插件 → 浏览器扩展 里查看）</label>
+  <input id="server" placeholder="http://192.168.1.23:8787">
+
+  <label>访问 Token</label>
+  <input id="token" placeholder="24 位小写字母数字">
+
+  <button id="save">保存</button>
+  <button id="test" class="ghost">测试连接</button>
+  <div id="status"></div>
+
+  <div class="hint">
+    1. 手机与电脑连同一个 Wi-Fi（或电脑连手机热点）；<br>
+    2. 手机打开「插件 → 浏览器下载桥」；<br>
+    3. 在电脑 Chrome / Edge 地址栏输入 <code>chrome://extensions</code>，开启「开发者模式」，
+    点「加载已解压的扩展程序」，选择手机导出的扩展文件夹；<br>
+    4. 手机浏览器若支持扩展（Kiwi / Mises / Lemur 等），同法加载。
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,238 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Android 11+ 访问公共下载目录的主方案（旁加载应用，无上架限制） -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+    <!-- Android 8.0 ~ 10 的兼容读取权限，不作为主方案 -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"
+        tools:ignore="ScopedStorage" />
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 看门狗闹钟（Android 12+ 需单独授权；未授权时代码自动降级为非精确闹钟） -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <!-- 安装 APK 必需：Android 8+ 缺了它，系统安装器收到 ACTION_VIEW 会静默结束（点了「打开」毫无反应） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Shizuku 特权通道（管理器持有该权限，Provider 校验用） -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!-- Shizuku 官方要求的包可见性声明（Android 11+）：
+         管理器/Sui 包名 + 管理器 provider authority（索取连接、binder 推送链路使用）；
+         浏览器列表：插件页「浏览器扩展」需要检测手机里已安装的浏览器 -->
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="rikka.suda" />
+        <provider android:authorities="rikka.shizuku.manager.MAIN" />
+        <package android:name="com.android.chrome" />
+        <package android:name="com.chrome.beta" />
+        <package android:name="com.microsoft.emmx" />
+        <package android:name="com.kiwibrowser.browser" />
+        <package android:name="com.mises.browser" />
+        <package android:name="com.lemurbrowser.browser" />
+        <package android:name="com.quetta.browser" />
+        <package android:name="com.x.browser" />
+        <package android:name="alook.browser" />
+        <!-- 「打开文件」需要能看到系统里能处理这些类型的应用（Android 11+ 包可见性） -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/vnd.android.package-archive" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/zip" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="application/pdf" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="video/*" />
+        </intent>
+        <package android:name="org.mozilla.firefox" />
+        <package android:name="com.sec.android.app.sbrowser" />
+        <package android:name="com.tencent.mtt" />
+        <package android:name="com.UCMobile" />
+        <package android:name="mark.via.gp" />
+
+    </queries>
+
+    <application
+        android:name=".DownloadGuardApp"
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:preserveLegacyExternalStorage="true"
+        android:requestLegacyExternalStorage="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.DownloadGuard"
+        android:usesCleartextTraffic="true"
+        tools:targetApi="34">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- 浏览器长按链接 → 分享到浏览器下载接管：无 root 也能把原始 URL 带进来 -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- 网页嗅探页：加载下载站页面，自动抓取真实文件地址（无需复制链接） -->
+        <activity
+            android:name=".ui.SniffActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:theme="@style/Theme.DownloadGuard"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 常驻守护前台服务：specialUse + dataSync 双声明 -->
+        <service
+            android:name=".service.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="download_integrity_guard:持续监听公共下载目录，校验新下载的 apk/apks/xapk/zip 安装包完整性" />
+        </service>
+
+        <!-- WorkManager 内置前台服务：重新下载大文件时使用 dataSync 类型 -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+
+        <!-- 开机自启（含直接启动阶段与覆盖安装） -->
+        <receiver
+            android:name=".service.BootReceiver"
+            android:directBootAware="true"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 可选：读取下载通知里的链接（需用户在「通知使用权」中手动勾选） -->
+        <service
+            android:name=".service.DownloadLinkListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 浏览器无障碍爬取：抓取 .apk 直链（Shizuku 可静默开启；无 Shizuku 手动到系统设置勾选） -->
+        <service
+            android:name=".service.DownloadAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 特权剪贴板监听（前台 specialUse；Shizuku 走 shell uid，无 Shizuku 时降级前台读取） -->
+        <service
+            android:name=".service.ClipboardWatchService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:stopWithTask="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="clipboard_apk_link_watch:静默监听剪贴板中的安装包直链并提醒一键下载" />
+        </service>
+
+        <!-- Shizuku Provider：授权中枢的进程间连接点，applicationId.shizuku -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="moe.shizuku.manager.permission.API_V23" />
+
+        <!-- 闹钟看门狗：前台服务被杀后自愈 -->
+        <receiver
+            android:name=".service.WatchdogReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.dlguard.action.WATCHDOG" />
+            </intent-filter>
+        </receiver>
+
+        <!-- LSPosed 模块回传下载链接（只记录候选，不自动下载） -->
+        <receiver
+            android:name=".service.CapturedUrlReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.dlguard.action.CAPTURED_URL" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 通知按钮：重新下载 / 删除 / 忽略 -->
+        <receiver
+            android:name=".service.NotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.dlguard.action.REDOWNLOAD" />
+                <action android:name="com.dlguard.action.DELETE" />
+                <action android:name="com.dlguard.action.IGNORE" />
+            </intent-filter>
+        </receiver>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

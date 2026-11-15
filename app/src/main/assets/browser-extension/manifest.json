@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "DownloadGuard 浏览器下载桥",
+  "version": "1.0.0",
+  "description": "把浏览器下载转发到手机 DownloadGuard：48 线程加速 + 安装包完整性校验",
+  "permissions": ["downloads", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "DownloadGuard 下载桥",
+    "default_popup": "options.html"
+  }
+}

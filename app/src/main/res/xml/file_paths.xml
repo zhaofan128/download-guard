@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path
+        name="guard_cache"
+        path="." />
+    <files-path
+        name="guard_files"
+        path="." />
+    <external-files-path
+        name="guard_external"
+        path="." />
+    <external-path
+        name="public_storage"
+        path="." />
+</paths>
