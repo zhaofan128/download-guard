@@ -70,6 +70,7 @@ class MonitorService : Service() {
             checker = container.checker,
             repository = container.repository,
             quarantine = container.quarantine,
+            trustedStore = container.trustedStore,
             resolver = DownloadHistoryResolver(this),
             notifier = notifier,
             shouldNotify = { notificationsEnabled },

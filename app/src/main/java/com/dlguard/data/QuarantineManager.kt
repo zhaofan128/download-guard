@@ -74,6 +74,44 @@ class QuarantineManager(private val context: Context) {
         false
     }
 
+    /**
+     * 把隔离的文件放回原位（用户点「信任并恢复」）。
+     *
+     * 原路径已被别的文件占用时不覆盖，改名成 `xxx_restored_1.apk` ——
+     * 恢复操作绝不能悄悄覆盖用户现有的东西。
+     * 返回恢复后的文件；失败返回 null。
+     */
+    suspend fun restore(quarantined: File, originalPath: String): File? = withContext(Dispatchers.IO) {
+        if (!quarantined.exists()) return@withContext null
+        val original = File(originalPath)
+        val dir = original.parentFile ?: return@withContext null
+        if (!dir.exists() && !dir.mkdirs()) return@withContext null
+        var target = original
+        if (target.exists()) {
+            val dot = original.name.lastIndexOf('.')
+            val base = if (dot > 0) original.name.substring(0, dot) else original.name
+            val ext = if (dot > 0) original.name.substring(dot) else ""
+            var index = 1
+            while (target.exists()) {
+                target = File(dir, "${base}_restored_$index$ext")
+                index++
+            }
+        }
+        if (runCatching { quarantined.renameTo(target) }.getOrDefault(false)) {
+            return@withContext target
+        }
+        // 跨卷：复制后删源，长度不一致则回滚，不留半截文件
+        runCatching {
+            quarantined.copyTo(target, overwrite = false, bufferSize = 256 * 1024)
+            if (target.length() == quarantined.length() && quarantined.delete()) {
+                target
+            } else {
+                target.delete()
+                null
+            }
+        }.getOrNull()
+    }
+
     suspend fun clear(): Int = withContext(Dispatchers.IO) {
         var count = 0
         list().forEach { if (it.delete()) count++ }

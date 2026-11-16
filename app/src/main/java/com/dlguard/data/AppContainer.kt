@@ -22,6 +22,9 @@ class AppContainer(private val context: Context) {
     val database: AppDatabase by lazy { AppDatabase.get(context) }
     val settings: SettingsStore by lazy { SettingsStore(context) }
     val quarantine: QuarantineManager by lazy { QuarantineManager(context) }
+
+    /** 用户显式确认过「没问题」的文件指纹（加壳包、企业定制包等）。 */
+    val trustedStore: TrustedStore by lazy { TrustedStore(context) }
     val checker: ApkIntegrityChecker by lazy { ApkIntegrityChecker(context) }
     val resolver: DownloadHistoryResolver by lazy { DownloadHistoryResolver(context, capturedLinks) }
     val capturedLinks: CapturedLinks by lazy { CapturedLinks(context) }

@@ -21,13 +21,13 @@ interface CheckRecordDao {
     @Query("SELECT COUNT(*) FROM check_records")
     fun observeTotal(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM check_records WHERE verdict != 'OK'")
+    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED')")
     fun observeBroken(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM check_records")
     suspend fun totalCount(): Int
 
-    @Query("SELECT COUNT(*) FROM check_records WHERE verdict != 'OK'")
+    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED')")
     suspend fun brokenCount(): Int
 
     @Query("SELECT * FROM check_records WHERE id = :id LIMIT 1")
@@ -45,6 +45,13 @@ interface CheckRecordDao {
 
     @Query("UPDATE check_records SET quarantinedPath = :path WHERE id = :id")
     suspend fun setQuarantinePath(id: Long, path: String?)
+
+    /** 用户确认信任并把文件从隔离区恢复：更新结论、路径，清掉隔离位置。 */
+    @Query(
+        "UPDATE check_records SET verdict = 'TRUSTED', detail = :detail, " +
+            "quarantinedPath = NULL, filePath = :path WHERE id = :id"
+    )
+    suspend fun markTrusted(id: Long, path: String, detail: String)
 
     @Query("UPDATE check_records SET ignored = :ignored WHERE id = :id")
     suspend fun setIgnored(id: Long, ignored: Boolean)

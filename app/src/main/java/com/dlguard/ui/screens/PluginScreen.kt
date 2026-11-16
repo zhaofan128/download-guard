@@ -504,6 +504,10 @@ private fun PluginDetailDialog(
     val installed = local != null
     val enabled = local?.enabled == true
     val favorite = pluginId in favorites
+    // 来源与包摘要只读一次，别在重组里反复读文件
+    val provenance = remember(pluginId, installed) {
+        if (installed && !manifest.pinned) viewModel.provenance(pluginId) else emptyMap()
+    }
     var values by remember(pluginId, manifest.config) {
         val stored = viewModel.configOf(pluginId)
         mutableStateOf(
@@ -633,6 +637,15 @@ private fun PluginDetailDialog(
                             }
                         )
                         DetailLine("插件 ID", manifest.id)
+                        // 信任链：说明能力边界 + 留一条可核对的安装来源
+                        DetailLine("能力边界", "声明式配置，不含可执行代码")
+                        provenance["source"]?.let { DetailLine("安装来源", it) }
+                        provenance["sha256"]?.let {
+                            DetailLine(
+                                "包摘要",
+                                com.dlguard.integrity.FileHasher.shorten(it, 16, 8)
+                            )
+                        }
                         if (manifest.id == PluginManager.ID_BROWSER_BRIDGE) {
                             DetailLine(
                                 "监听",

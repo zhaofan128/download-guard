@@ -32,6 +32,7 @@ class CheckPipeline(
     private val checker: ApkIntegrityChecker,
     private val repository: GuardRepository,
     private val quarantine: QuarantineManager,
+    private val trustedStore: com.dlguard.data.TrustedStore,
     private val resolver: DownloadHistoryResolver,
     private val notifier: NotificationHelper,
     private val shouldNotify: () -> Boolean = { true },
@@ -132,16 +133,30 @@ class CheckPipeline(
 
             var quarantinedPath: String? = null
             var quarantineFailed = false
-            if (!result.healthy) {
-                val moved = quarantine.quarantine(file)
-                if (moved != null) {
-                    quarantinedPath = moved.absolutePath
+            // 判定不健康时先查信任指纹：命中就直接放行，不再隔离。
+            // 只在「即将隔离」这条低频路径上算整文件 SHA-256，成本可以接受。
+            var finalResult = result
+            if (!finalResult.healthy) {
+                val sha = runCatching {
+                    com.dlguard.integrity.FileHasher.sha256(file)
+                }.getOrNull()
+                if (sha != null && trustedStore.isTrusted(file.length(), sha)) {
+                    finalResult = result.copy(
+                        verdict = Verdict.TRUSTED,
+                        detail = "此文件指纹已在信任列表（${sha.take(12)}…），跳过隔离。" +
+                            "原始判定：${result.verdict.label} · ${result.detail}"
+                    )
                 } else {
-                    quarantineFailed = true
+                    val moved = quarantine.quarantine(file)
+                    if (moved != null) {
+                        quarantinedPath = moved.absolutePath
+                    } else {
+                        quarantineFailed = true
+                    }
                 }
             }
 
-            val recordId = repository.saveResult(result, file, source, quarantinedPath)
+            val recordId = repository.saveResult(finalResult, file, source, quarantinedPath)
             if (processed.size > maxProcessed) processed.clear()
             processed[key] = System.currentTimeMillis()
 
@@ -149,12 +164,12 @@ class CheckPipeline(
                 it.copy(
                     lastCheckedAt = System.currentTimeMillis(),
                     lastFileName = file.name,
-                    lastVerdict = result.verdict.name
+                    lastVerdict = finalResult.verdict.name
                 )
             }
-            onRecordSaved(result)
+            onRecordSaved(finalResult)
 
-            if (!result.healthy) {
+            if (!finalResult.healthy) {
                 val record = repository.findRecord(recordId)
                 if (record != null && shouldNotify()) {
                     notifier.notifyCorrupt(record)
@@ -163,7 +178,7 @@ class CheckPipeline(
                     Log.w(TAG, "隔离失败，文件保留原地：$path")
                 }
             }
-            Log.i(TAG, "${file.name} => ${result.verdict} (${result.detail})")
+            Log.i(TAG, "${file.name} => ${finalResult.verdict} (${finalResult.detail})")
         } finally {
             active.remove(key)
             // 校验期间文件又被写入（浏览器续写、用户覆盖）：fingerprint 变了就再排一次，别漏掉最终版本

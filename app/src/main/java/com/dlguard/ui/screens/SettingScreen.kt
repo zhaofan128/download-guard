@@ -105,8 +105,8 @@ fun SettingScreen(
             start = Spacing.Page,
             end = Spacing.Page,
             top = 10.dp,
-            // 底部内边距强制 ≥120dp：悬浮胶囊导航栏不再遮挡最后几行设置项
-            bottom = maxOf(bottomInset + 24.dp, 120.dp)
+            // 底部内边距强制 ≥140dp：悬浮胶囊导航栏 + 手势条都不遮挡最后几行
+            bottom = maxOf(bottomInset + 40.dp, 140.dp)
         ),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
@@ -224,7 +224,10 @@ fun SettingScreen(
         }
 
         item {
-            Section("Shizuku 特权中枢") {
+            CollapsibleSection(
+            title = "Shizuku 特权中枢",
+            subtitle = "shell 安装、静默授权等高级能力，不装也能正常用所有核心功能"
+        ) {
                 ShizukuStatusRow(
                     status = shizukuStatus,
                     onRequest = { settingViewModel.requestShizukuPermission() }
@@ -433,7 +436,10 @@ fun SettingScreen(
         }
 
         item {
-            Section("日志与数据") {
+            CollapsibleSection(
+            title = "日志与数据",
+            subtitle = "导出校验日志、清空记录、复制隔离区路径"
+        ) {
                 SettingAction(
                     title = "导出校验日志",
                     subtitle = "生成 CSV 并调用系统分享（含结论、大小、来源、隔离路径）",
@@ -486,7 +492,7 @@ fun SettingScreen(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = "版本 ${BuildConfig.VERSION_NAME} · minSdk 26 / targetSdk 34\n" +
-                        "32 线程块级调度下载 + 本地真实校验：EOCD → 全 entry CRC32 → APK 解析 → v2 签名验签。不上传任何文件。",
+                        "最高 256 连接块级调度 + 多任务队列 + 本地真实校验：EOCD → 全 entry CRC32 → APK 解析 → v2 签名验签 → 可选官方哈希比对。不上传任何文件。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
@@ -744,6 +750,58 @@ private fun ShizukuStatusRow(status: ShizukuHelper.Status, onRequest: () -> Unit
             onClick = onRequest,
             style = if (granted) GuardButtonStyle.Glass else GuardButtonStyle.Primary
         )
+    }
+}
+
+/**
+ * 可折叠分组：高级功能默认收起。
+ *
+ * 设置页一屏塞十几个开关时，新用户很难判断哪些是必须的。把「Shizuku」「日志与数据」
+ * 这类只在特定场景用得到的分组收起来，首屏只留守护行为、权限、目录这些必看项。
+ */
+@Composable
+private fun CollapsibleSection(
+    title: String,
+    subtitle: String,
+    initiallyExpanded: Boolean = false,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(start = 6.dp, end = 6.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                )
+                if (!expanded) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                    )
+                }
+            }
+            Text(
+                text = if (expanded) "收起" else "展开",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                modifier = Modifier.padding(start = 10.dp)
+            )
+        }
+        if (expanded) {
+            GlassCard(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)) {
+                content()
+            }
+        }
     }
 }
 

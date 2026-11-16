@@ -160,6 +160,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * 用户确认「这个文件我信」：从隔离区放回原位，并把 SHA-256 指纹记进信任库。
+     *
+     * 这是一条**显式**通道，只由用户点按钮触发。记录里会写清楚原始判定结论，
+     * 事后回看能一眼看出「这不是校验通过，是我自己决定信的」。
+     */
+    fun trustAndRestore(record: CheckRecord) {
+        val quarantinedPath = record.quarantinedPath
+        if (quarantinedPath.isNullOrBlank()) return
+        viewModelScope.launch {
+            val quarantined = java.io.File(quarantinedPath)
+            if (!quarantined.exists()) {
+                _messages.tryEmit("隔离区里已经找不到这个文件了")
+                return@launch
+            }
+            _messages.tryEmit("正在计算文件指纹…")
+            val sha = withContext(Dispatchers.IO) {
+                com.dlguard.integrity.FileHasher.sha256(quarantined)
+            }
+            val restored = withContext(Dispatchers.IO) {
+                container.quarantine.restore(quarantined, record.filePath)
+            }
+            if (restored == null) {
+                _messages.tryEmit("恢复失败：目标目录不可写")
+                return@launch
+            }
+            if (sha != null) {
+                container.trustedStore.trust(restored.length(), sha, restored.name)
+            }
+            container.repository.markTrusted(
+                record.id,
+                restored.absolutePath,
+                "用户确认信任并从隔离区恢复。" +
+                    "SHA-256 ${sha?.let { com.dlguard.integrity.FileHasher.shorten(it) } ?: "未计算"}" +
+                    "；原始判定：${record.verdict}"
+            )
+            refreshQuarantine()
+            _messages.tryEmit("已恢复并信任：${restored.name}")
+        }
+    }
+
     fun refreshQuarantine() {
         viewModelScope.launch {
             val files = withContext(Dispatchers.IO) { container.quarantine.list() }

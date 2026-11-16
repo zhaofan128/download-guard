@@ -12,6 +12,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
@@ -66,7 +67,11 @@ import com.dlguard.ui.theme.DownloadGuardTheme
  *  - [android.webkit.DownloadListener]：页面自己发起下载时，拿到最终 URL；
  *  - [WebViewClient.shouldOverrideUrlLoading]：脚本跳转到 .apk 时拦下来；
  *  - 注入 [LinkSniffer.SCAN_SCRIPT]：扫 DOM 里的 a[href] / data-* / onclick，
- *    把页面上所有可疑直链列成候选清单。
+ *    把页面上所有可疑直链列成候选清单；
+ *  - [WebViewClient.shouldInterceptRequest]：从**网络层**看 XHR / Fetch，
+ *    抓接口返回、DOM 里根本没有的直链。
+ *
+ * 另外顺手把页面里的官方 SHA-256 / MD5 抓出来，作为下载后的校验基准候选。
  *
  * 确认后直接进 48 线程引擎，不需要用户复制任何东西。
  */
@@ -94,14 +99,19 @@ class SniffActivity : ComponentActivity() {
                     SniffScreen(
                         pageUrl = pageUrl,
                         onClose = { finish() },
-                        onStartDownload = { url, name, referer ->
+                        onStartDownload = { url, name, referer, expectedHash ->
                             // 下载站常校验来源页/登录态：把 WebView 当前的 Referer 与 Cookie
                             // 一并交给下载引擎，否则直链会直接 403
                             val cookie = runCatching {
                                 CookieManager.getInstance().getCookie(referer)
                             }.getOrNull()
                             (application as? DownloadGuardApp)?.container?.downloadCenter
-                                ?.start(url, name, referer = referer, cookie = cookie)
+                                ?.start(
+                                    url, name,
+                                    referer = referer,
+                                    cookie = cookie,
+                                    expectedHash = expectedHash
+                                )
                             finish()
                         }
                     )
@@ -120,7 +130,7 @@ private const val MOBILE_UA =
 private fun SniffScreen(
     pageUrl: String,
     onClose: () -> Unit,
-    onStartDownload: (String, String?, String) -> Unit
+    onStartDownload: (String, String?, String, String?) -> Unit
 ) {
     val context = LocalContext.current
     var currentUrl by remember { mutableStateOf(pageUrl) }
@@ -133,6 +143,12 @@ private fun SniffScreen(
     var pendingInfo by remember { mutableStateOf<LinkSniffer.Probe?>(null) }
     var resolving by remember { mutableStateOf(false) }
     var pageError by remember { mutableStateOf<String?>(null) }
+    // 网络层抓到的候选：shouldInterceptRequest 在后台线程回调，必须用并发容器
+    val wireCandidates = remember {
+        java.util.concurrent.ConcurrentHashMap<String, LinkSniffer.Candidate>()
+    }
+    var pageHashes by remember { mutableStateOf<List<LinkSniffer.HashHint>>(emptyList()) }
+    var selectedHash by remember { mutableStateOf<LinkSniffer.HashHint?>(null) }
 
     val webView = remember {
         WebView(context).apply {
@@ -179,10 +195,52 @@ private fun SniffScreen(
                     // 动态按钮通常晚于 onPageFinished 渲染，延迟再扫一次
                     view.postDelayed({
                         view.evaluateJavascript(LinkSniffer.SCAN_SCRIPT) { raw ->
-                            val found = LinkSniffer.parseJsResult(currentUrl, raw)
-                            if (found.isNotEmpty()) candidatesState.value = found
+                            val dom = LinkSniffer.parseJsResult(currentUrl, raw)
+                            // DOM 与网络层两路合并：网络层抓到的地址页面元素里往往没有
+                            val merged = LinkSniffer.mergeCandidates(
+                                currentUrl, dom, wireCandidates.values
+                            )
+                            if (merged.isNotEmpty()) candidatesState.value = merged
                         }
                     }, LinkSniffer.SCAN_DELAY_MS)
+                    // 校验值常写在页面底部或详情里，比按钮渲染更晚，再等一会儿
+                    view.postDelayed({
+                        view.evaluateJavascript(LinkSniffer.TEXT_SCRIPT) { raw ->
+                            val text = LinkSniffer.parseJsText(raw)
+                            if (text.isNotBlank()) {
+                                val hints = LinkSniffer.extractHashes(text)
+                                if (hints.isNotEmpty()) pageHashes = hints
+                            }
+                        }
+                    }, LinkSniffer.SCAN_DELAY_MS + 600)
+                }
+
+                /**
+                 * 网络层拦截：页面用 fetch/XHR 拉回来的东西在这里过一遍。
+                 *
+                 * 只观察、不改变任何请求——始终返回 null，页面该怎么加载还怎么加载。
+                 * 拿到的是**请求**信息（没有响应头），所以用 URL 后缀 + Accept 头判断，
+                 * 命中的再交给用户的候选列表，由 [LinkSniffer.probe] 真正确认。
+                 */
+                override fun shouldInterceptRequest(
+                    view: WebView,
+                    request: WebResourceRequest
+                ): WebResourceResponse? {
+                    if (!request.isForMainFrame) {
+                        runCatching {
+                            val target = request.url.toString()
+                            val accept = request.requestHeaders["Accept"].orEmpty()
+                            if (LinkSniffer.looksLikeWireDownload(target, accept, request.method)) {
+                                wireCandidates[target] = LinkSniffer.Candidate(
+                                    url = target,
+                                    text = target.substringAfterLast('/').take(80),
+                                    score = 0,
+                                    origin = LinkSniffer.ORIGIN_WIRE
+                                )
+                            }
+                        }
+                    }
+                    return null
                 }
 
                 override fun shouldOverrideUrlLoading(
@@ -236,6 +294,18 @@ private fun SniffScreen(
 
     BackHandler {
         if (webView.canGoBack()) webView.goBack() else onClose()
+    }
+
+    // 网络层候选是边浏览边冒出来的，定时并进列表，不用等整页加载完
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1_200)
+            if (wireCandidates.isEmpty()) continue
+            val merged = LinkSniffer.mergeCandidates(
+                currentUrl, candidatesState.value, wireCandidates.values
+            )
+            if (merged.size > candidatesState.value.size) candidatesState.value = merged
+        }
     }
 
     // 拿到待确认地址后解析真实文件名与大小（HEAD，失败不影响下载）
@@ -411,18 +481,43 @@ private fun SniffScreen(
                                 Column(
                                     Modifier
                                         .fillMaxWidth()
-                                        .clickable { pendingUrl = candidate.url }
+                                        .clickable {
+                                            pendingUrl = candidate.url
+                                            selectedHash = null
+                                        }
                                         .padding(horizontal = 16.dp, vertical = 10.dp)
                                 ) {
-                                    Text(
-                                        text = candidate.text.ifBlank {
-                                            candidate.url.substringAfterLast('/').ifBlank { "下载链接" }
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = candidate.text.ifBlank {
+                                                candidate.url.substringAfterLast('/')
+                                                    .ifBlank { "下载链接" }
+                                            },
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        val kind = LinkSniffer.streamKind(candidate.url)
+                                        val badge = when {
+                                            kind != null -> kind.label
+                                            candidate.origin == LinkSniffer.ORIGIN_WIRE -> "网络层"
+                                            else -> null
+                                        }
+                                        if (badge != null) {
+                                            Text(
+                                                text = badge,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = if (kind != null) {
+                                                    MaterialTheme.colorScheme.error
+                                                } else {
+                                                    MaterialTheme.colorScheme.primary
+                                                },
+                                                modifier = Modifier.padding(start = 8.dp)
+                                            )
+                                        }
+                                    }
                                     Text(
                                         text = candidate.url,
                                         style = MaterialTheme.typography.labelSmall,
@@ -452,9 +547,10 @@ private fun SniffScreen(
             onDismissRequest = {
                 pendingUrl = null
                 pendingInfo = null
+                selectedHash = null
             },
             title = {
-                Text(if (resolving) "正在解析链接" else "用 48 线程加速下载")
+                Text(if (resolving) "正在解析链接" else "加入下载队列")
             },
             text = {
                 Column {
@@ -485,6 +581,55 @@ private fun SniffScreen(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
+                        // 流媒体：下下来也是个播放列表，说清楚比默默不支持好
+                        val stream = LinkSniffer.streamKind(target)
+                        if (stream != null) {
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                text = "这是${stream.label}，不是完整文件。内置下载器不做流媒体解密，" +
+                                    "建议复制链接后用专用工具（如 N_m3u8DL、ffmpeg）下载。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        // 页面里写着的官方校验值：只作为候选，默认不选。
+                        // 自动采纳等于让页面同时控制文件与校验基准，反而失去意义。
+                        if (pageHashes.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                text = "页面里发现 ${pageHashes.size} 个校验值，下载完可自动比对",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            pageHashes.take(3).forEach { hint ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedHash = if (selectedHash == hint) null else hint
+                                        }
+                                        .padding(vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${hint.algorithm}  ${hint.value.take(20)}…",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text(
+                                        text = if (selectedHash == hint) "已选用" else "选用",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selectedHash == hint) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             },
@@ -492,7 +637,12 @@ private fun SniffScreen(
                 TextButton(
                     enabled = !resolving,
                     onClick = {
-                        onStartDownload(target, pendingInfo?.fileName, currentUrl)
+                        onStartDownload(
+                            target,
+                            pendingInfo?.fileName,
+                            currentUrl,
+                            selectedHash?.let { "${it.algorithm}:${it.value}" }
+                        )
                         pendingUrl = null
                         pendingInfo = null
                     }
@@ -504,6 +654,7 @@ private fun SniffScreen(
                 TextButton(onClick = {
                     pendingUrl = null
                     pendingInfo = null
+                    selectedHash = null
                 }) {
                     Text("取消")
                 }

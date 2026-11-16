@@ -25,6 +25,7 @@ import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.Response
 import java.io.File
 import java.io.IOException
 import java.io.RandomAccessFile
@@ -240,7 +241,24 @@ class ResumableDownloader(
     private class RangeUnsupportedException : IOException("服务器忽略 Range 请求")
     private class StaleRemoteException(message: String) : IOException(message)
     private class WifiBlockedException(message: String) : IOException(message)
-    private class HttpStatusException(val code: Int, message: String) : IOException(message)
+    private class HttpStatusException(
+        val code: Int,
+        message: String,
+        /** 429/503 时服务器给的 Retry-After（秒）。照着等比自作聪明提前重试有效得多。 */
+        val retryAfterSeconds: Int? = null
+    ) : IOException(message)
+
+    /** 解析 Retry-After：既支持秒数，也支持 HTTP-date 形式。 */
+    private fun retryAfterSeconds(response: Response): Int? {
+        val raw = response.header("Retry-After")?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        raw.toIntOrNull()?.let { return it.coerceIn(1, 300) }
+        val at = runCatching {
+            java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
+                .parse(raw)?.time
+        }.getOrNull() ?: return null
+        return ((at - System.currentTimeMillis()) / 1000).toInt().coerceIn(1, 300)
+    }
 
     /** 一个下载 worker 的句柄：id 用于挑连接池，retire 用于并发下调时让它优雅收尾。 */
     private class WorkerHandle(
@@ -384,6 +402,10 @@ class ResumableDownloader(
             } catch (e: HttpStatusException) {
                 lastError = describeHttp(e.code, e.message)
                 lastHttpCode = e.code
+                // 429：服务器明确要求「过 N 秒再来」，照着等。硬冲只会让封禁时间变长。
+                if (e.code == 429 || e.code == 503) {
+                    e.retryAfterSeconds?.let { delay(it * 1_000L) }
+                }
                 if (e.code in 400..499 && e.code != 408 && e.code != 429) {
                     return@withContext DownloadOutcome(
                         error = lastError, url = trimmedUrl, httpCode = e.code
@@ -489,7 +511,7 @@ class ResumableDownloader(
                         )
                     }
                 }
-                throw HttpStatusException(response.code, response.message)
+                throw HttpStatusException(response.code, response.message, retryAfterSeconds(response))
             }
         } catch (e: HttpStatusException) {
             if (e.code != 405 && e.code != 400 && e.code != 501 && e.code != 403) throw e
@@ -597,6 +619,9 @@ class ResumableDownloader(
             val poolIndex = freeClients.poll() ?: (id % MAX_CONNECTIONS)
             val job = launch(workerDispatcher) {
                 try {
+                    // 错峰 0~248ms：256 条连接同一瞬间发起握手，防火墙很容易判成 SYN 洪泛，
+                    // 结果就是整批被 403/429。分散开后同样的请求量显得正常得多。
+                    if (poolIndex > 0) delay((poolIndex % 32) * 8L)
                     workerLoop(
                         workerId = id,
                         scheduler = scheduler,
@@ -869,7 +894,7 @@ class ResumableDownloader(
                     if (start + done > limit) return
                     throw StaleRemoteException("分块 $start 请求区间被服务器拒绝（416）")
                 }
-                if (response.code != 206) throw HttpStatusException(response.code, response.message)
+                if (response.code != 206) throw HttpStatusException(response.code, response.message, retryAfterSeconds(response))
                 val contentRange = response.header("Content-Range")
                     ?: throw IOException("206 响应缺少 Content-Range")
                 val parsedRange = parseContentRange(contentRange)
@@ -982,7 +1007,7 @@ class ResumableDownloader(
                 part.delete()
                 throw StaleRemoteException("416 且本地分片不完整，清理后重下")
             }
-            if (!response.isSuccessful) throw HttpStatusException(response.code, response.message)
+            if (!response.isSuccessful) throw HttpStatusException(response.code, response.message, retryAfterSeconds(response))
             val body = response.body ?: throw IOException("响应体为空")
             val partial = response.code == 206
             var total = when {

@@ -8,6 +8,7 @@ import com.dlguard.service.GuardState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -39,6 +40,8 @@ data class DownloadTask(
     val referer: String? = null,
     /** 登录态 Cookie（从 WebView 的 CookieManager 取）。 */
     val cookie: String? = null,
+    /** 用户选定的官方校验基准，格式 `SHA-256:abc…`；空 = 不比对。 */
+    val expectedHash: String? = null,
     val phase: TaskPhase = TaskPhase.QUEUED,
     val fileName: String,
     val progress: Float = 0f,
@@ -139,15 +142,17 @@ class DownloadCenter(
         url: String,
         preferredName: String? = null,
         referer: String? = null,
-        cookie: String? = null
-    ) = addTask(url, preferredName, referer, cookie)
+        cookie: String? = null,
+        expectedHash: String? = null
+    ) = addTask(url, preferredName, referer, cookie, expectedHash)
 
     /** 加一个下载任务。并行槽位有空就立刻开跑，没有就排队（顺序 = 加入顺序）。 */
     fun addTask(
         url: String,
         preferredName: String? = null,
         referer: String? = null,
-        cookie: String? = null
+        cookie: String? = null,
+        expectedHash: String? = null
     ): Boolean {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) {
@@ -165,6 +170,7 @@ class DownloadCenter(
             preferredName = preferredName,
             referer = referer,
             cookie = cookie,
+            expectedHash = expectedHash,
             fileName = preferredName ?: guessName(trimmed)
         )
         runtimes[id] = TaskRuntime(id)
@@ -216,7 +222,7 @@ class DownloadCenter(
             rt.autoAdjusted = false
             val policy = runCatching { policyProvider() }.getOrDefault(DownloadPolicy())
 
-            val outcome = downloader.download(
+            var outcome = downloader.download(
                 url = url,
                 preferredName = task.preferredName,
                 requireWifi = settings?.wifiOnlyDownload ?: false,
@@ -255,6 +261,56 @@ class DownloadCenter(
                     }
                 }
             )
+
+            // 遇阻自保：403/429 大概率是服务器在限流，此时并发越高越糟。
+            // 整轮失败后自动把并发减半再来一次——分片都在，续传不重下。
+            var throttleRound = 0
+            while (!outcome.success) {
+                val code = outcome.httpCode ?: 0
+                val maxRounds = if (code == 429) 3 else 1
+                val canThrottle = (code == 429 || code == 403) &&
+                    gate.wanted > 1 &&
+                    throttleRound < maxRounds &&
+                    rt.job?.isActive == true
+                if (!canThrottle) break
+                throttleRound++
+                val next = (gate.wanted / 2).coerceAtLeast(1)
+                gate.request(next)
+                updateTask(id) { it.copy(connections = next, speed = 0) }
+                _events.tryEmit(
+                    if (code == 429) {
+                        "服务器限流（HTTP 429），已降到 $next 连接并等待后重试"
+                    } else {
+                        "服务器拒绝并发请求（HTTP 403），已降到 $next 连接重试"
+                    }
+                )
+                // 429 是明确的「你太快了」，等久一点；403 更像权限问题，只轻退避
+                delay(if (code == 429) 5_000L * throttleRound else 2_000L * throttleRound)
+                outcome = downloader.download(
+                    url = url,
+                    preferredName = task.preferredName,
+                    requireWifi = settings?.wifiOnlyDownload ?: false,
+                    connections = next,
+                    referer = task.referer,
+                    cookie = task.cookie,
+                    governor = gate,
+                    policy = policy,
+                    onProgress = { progress ->
+                        if (rt.job?.isActive != true) return@download
+                        updateTask(id) { t ->
+                            if (t.phase != TaskPhase.RUNNING) t else t.copy(
+                                progress = progress.fraction,
+                                downloaded = progress.downloadedBytes,
+                                total = progress.totalBytes,
+                                speed = progress.bytesPerSecond,
+                                attempt = progress.attempt,
+                                connections = progress.connections,
+                                hotSwitchable = progress.segmented
+                            )
+                        }
+                    }
+                )
+            }
 
             if (outcome.success) {
                 finishSuccess(task, outcome, policy)
@@ -323,12 +379,16 @@ class DownloadCenter(
             outcome.elapsedMs == 0L -> "\n目标目录已有相同文件（大小一致、校验通过），本次未重复下载"
             else -> ""
         }
+        val hashCheck = verifyExpectedHash(file, task.expectedHash)
         val summary = integrity.summary() +
-            "\n平均 ${speedText(outcome.averageSpeed)} · 用时 ${outcome.elapsedMs / 1000} 秒" + extra
+            "\n平均 ${speedText(outcome.averageSpeed)} · 用时 ${outcome.elapsedMs / 1000} 秒" +
+            extra + hashCheck.summary
+        // 官方哈希不符 = 文件内容与发布方给出的值不是同一个东西，
+        // 无论传输是否完整都不能报「完成」，否则用户会以为拿到了正品。
         updateTask(task.id) { t ->
             t.copy(
-                phase = TaskPhase.DONE,
-                progress = 1f,
+                phase = if (hashCheck.mismatch) TaskPhase.FAILED else TaskPhase.DONE,
+                progress = if (hashCheck.mismatch) t.progress else 1f,
                 downloaded = outcome.bytes,
                 total = outcome.bytes,
                 speed = 0,
@@ -337,10 +397,11 @@ class DownloadCenter(
                 message = summary
             )
         }
-        _events.tryEmit(
-            if (outcome.replacedExisting) "下载完成：${file.name}（已替换旧文件）"
-            else "下载完成：${file.name}"
-        )
+        when {
+            hashCheck.mismatch -> _events.tryEmit("${file.name} 与官方校验值不符，文件已保留但请勿使用")
+            outcome.replacedExisting -> _events.tryEmit("下载完成：${file.name}（已替换旧文件）")
+            else -> _events.tryEmit("下载完成：${file.name}")
+        }
         // 插件「完成即打开」：只在真校验通过后触发，失败的文件绝不自动拉起
         if (policy.autoOpen) {
             val opened = runCatching {
@@ -353,6 +414,38 @@ class DownloadCenter(
                     _events.tryEmit("已下载，首次安装需允许「安装未知应用」")
                 else -> Unit
             }
+        }
+    }
+
+    /** 官方哈希比对结论。 */
+    private data class HashCheck(val summary: String, val mismatch: Boolean)
+
+    /**
+     * 与用户选定的官方校验值比对整文件哈希。
+     *
+     * 注意这不是 APK 签名校验：签名只能证明「包是自己签的、没被改」，
+     * 官方公布的 SHA-256 才能证明「这个字节序列就是发布方发出的那一份」。
+     * 两者互补，所以这里单独算一次整文件摘要。
+     */
+    private suspend fun verifyExpectedHash(file: File, expected: String?): HashCheck {
+        if (expected.isNullOrBlank()) return HashCheck("", false)
+        val parsed = runCatching { com.dlguard.integrity.FileHasher.parseBaseline(expected) }.getOrNull()
+            ?: return HashCheck("\n⚠ 自定义校验值格式无法识别，已跳过比对", false)
+        val (algorithm, want) = parsed
+        val actual = runCatching {
+            com.dlguard.integrity.FileHasher.byAlgorithm(file, algorithm)
+        }.getOrNull()
+            ?: return HashCheck("\n⚠ 计算 $algorithm 失败，无法比对", false)
+        val shortWant = com.dlguard.integrity.FileHasher.shorten(want)
+        val shortActual = com.dlguard.integrity.FileHasher.shorten(actual)
+        return if (com.dlguard.integrity.FileHasher.matches(actual, want)) {
+            HashCheck("\n$algorithm 与官方值一致 ✓（$shortActual）", false)
+        } else {
+            HashCheck(
+                "\n⚠ $algorithm 与官方值不符\n官方 $shortWant\n实际 $shortActual" +
+                    "\n文件已保留在原位置，但内容与发布方公布的值不一致，请从官方渠道重新获取",
+                true
+            )
         }
     }
 

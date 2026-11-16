@@ -39,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -51,6 +52,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dlguard.integrity.FileHasher
+import kotlinx.coroutines.launch
 import com.dlguard.core.Formatters
 import com.dlguard.data.db.CheckRecord
 import com.dlguard.integrity.Verdict
@@ -131,7 +134,8 @@ fun RecordsScreen(viewModel: MainViewModel, bottomInset: Dp) {
                     expanded = expandedId == record.id,
                     onToggle = { expandedId = if (expandedId == record.id) null else record.id },
                     onDelete = { viewModel.deleteRecord(record) },
-                    onOpen = { fileOpen.open(record.filePath) }
+                    onOpen = { fileOpen.open(record.filePath) },
+                    onTrustRestore = { viewModel.trustAndRestore(record) }
                 )
             }
         }
@@ -181,7 +185,8 @@ private fun RecordDetailCard(
     expanded: Boolean,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
-    onOpen: () -> Unit
+    onOpen: () -> Unit,
+    onTrustRestore: () -> Unit
 ) {
     val motionEnabled = LocalMotionEnabled.current
     val verdict = runCatching { Verdict.valueOf(record.verdict) }.getOrNull()
@@ -266,11 +271,141 @@ private fun RecordDetailCard(
                             Text("打开文件", style = MaterialTheme.typography.labelLarge)
                         }
                     }
+                    // 加壳包、企业定制包这类被结构校验误判的，给一条明确的放行通道
+                    if (!record.quarantinedPath.isNullOrBlank()) {
+                        TextButton(onClick = onTrustRestore) {
+                            Text(
+                                "信任并恢复",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                        }
+                    }
                     TextButton(onClick = onDelete) {
                         Text("删除记录", color = Danger, style = MaterialTheme.typography.labelLarge)
                     }
                 }
+                HashCompareSection(
+                    filePath = if (record.quarantinedPath.isNullOrBlank()) {
+                        record.filePath
+                    } else {
+                        record.quarantinedPath
+                    },
+                    originPath = record.filePath
+                )
             }
+        }
+    }
+}
+
+/**
+ * 外部哈希比对：把官网公布的 MD5 / SHA-256 拿来对照本地文件。
+ *
+ * 内置校验证明的是「传输没坏、签名没被改」，但证明不了「这就是官方发布的那个文件」——
+ * 只有发布方自己公布的摘要能做到这一点。哈希默认不显示，点一下才算，
+ * 避免每次展开记录都去读一遍大文件。
+ */
+@Composable
+private fun HashCompareSection(filePath: String, originPath: String) {
+    var sha256 by remember(filePath) { mutableStateOf<String?>(null) }
+    var md5 by remember(filePath) { mutableStateOf<String?>(null) }
+    var busy by remember(filePath) { mutableStateOf(false) }
+    var input by remember(filePath) { mutableStateOf("") }
+    var verdictText by remember(filePath) { mutableStateOf<String?>(null) }
+    var verdictOk by remember(filePath) { mutableStateOf<Boolean?>(null) }
+    val scope = rememberCoroutineScope()
+    val target = java.io.File(filePath)
+    val usable = target.exists()
+
+    Column(Modifier.padding(top = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            TextButton(
+                enabled = usable && !busy,
+                onClick = {
+                    busy = true
+                    verdictText = null
+                    verdictOk = null
+                    scope.launch {
+                        sha256 = FileHasher.sha256(target)
+                        md5 = FileHasher.md5(target)
+                        busy = false
+                    }
+                }
+            ) {
+                Text(
+                    text = when {
+                        !usable -> "文件已不在原位"
+                        busy -> "计算中…"
+                        sha256 == null -> "计算文件哈希"
+                        else -> "重新计算"
+                    },
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+            if (sha256 != null) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    text = "SHA-256 · MD5",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                )
+            }
+        }
+        sha256?.let { DetailLine("SHA-256", it) }
+        md5?.let { DetailLine("MD5", it) }
+        if (usable && sha256 != null) {
+            Spacer(Modifier.height(6.dp))
+            androidx.compose.material3.OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                label = { Text("粘贴官网公布的 MD5 / SHA-256") },
+                singleLine = true,
+                textStyle = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(4.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    enabled = input.isNotBlank(),
+                    onClick = {
+                        val parsed = FileHasher.parseBaseline(input)
+                        if (parsed == null) {
+                            verdictOk = false
+                            verdictText = "识别不出校验值：支持 32 位 MD5、40 位 SHA-1、64 位 SHA-256"
+                            return@TextButton
+                        }
+                        val (algorithm, want) = parsed
+                        val actual = if (algorithm == "MD5") md5 else sha256
+                        if (actual == null) {
+                            verdictOk = false
+                            verdictText = "还没算出本地 $algorithm，先点上面的「计算文件哈希」"
+                            return@TextButton
+                        }
+                        verdictOk = FileHasher.matches(actual, want)
+                        verdictText = if (verdictOk == true) {
+                            "与官方值一致：这就是发布方发出的那一份"
+                        } else {
+                            "与官方值不符。文件可能被替换过，建议从官方渠道重新下载"
+                        }
+                    }
+                ) {
+                    Text("比对", style = MaterialTheme.typography.labelLarge)
+                }
+                verdictText?.let { text ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (verdictOk == true) Success else Danger
+                    )
+                }
+            }
+        }
+        if (!usable) {
+            Text(
+                text = "原位置：$originPath",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
         }
     }
 }

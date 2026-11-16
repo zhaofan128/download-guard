@@ -42,6 +42,9 @@ class ClipboardWatchService : Service() {
         private const val POLL_INTERVAL_MS = 3_000L
         private const val MAX_TEXT_LEN = 8192
 
+        /** 敏感文本的占位符：只用于「这条已经看过」的去重，不保存原文。 */
+        private const val SENSITIVE_MARKER = "\u0000sensitive"
+
         /** MonitorService 心跳据此判断剪贴板监听是否活着。 */
         @Volatile
         var isRunning: Boolean = false
@@ -117,8 +120,21 @@ class ClipboardWatchService : Service() {
             return
         }
         val text = readClipboard() ?: return
-        if (text == lastText || text.length > MAX_TEXT_LEN) return
-        val url = extractApkUrl(text) ?: return
+        if (text == lastText) return
+        if (text.length > MAX_TEXT_LEN) {
+            lastText = null
+            return
+        }
+        // 隐私闸门：密码、验证码、银行卡这类内容一律不进解析链路，
+        // 内存里只留一个占位符做去重，原文不保存、不记录、不上报。
+        if (looksSensitive(text)) {
+            lastText = SENSITIVE_MARKER
+            return
+        }
+        val url = extractApkUrl(text) ?: run {
+            lastText = text
+            return
+        }
         lastText = text
         capturedLinks.record(url, guessFileName(url), source = "剪贴板")
         runCatching { NotificationHelper(this@ClipboardWatchService).notifyClipboardLink(url) }
@@ -134,6 +150,24 @@ class ClipboardWatchService : Service() {
                 ?.takeIf { it.itemCount > 0 }
                 ?.getItemAt(0)?.text?.toString()?.trim()
         }.getOrNull()?.takeIf { it.isNotEmpty() }
+    }
+
+    /**
+     * 是不是不该碰的内容。
+     *
+     * 判据故意宽松：宁可漏记一个下载链接，也不把用户复制的密码留在内存里。
+     * 密码管理器、短信验证码、银行卡信息都会命中这些关键词。
+     */
+    private fun looksSensitive(text: String): Boolean {
+        // 没有 http 链接的纯文本本来就不会被使用（链接提取要求有 URL）
+        if (!text.contains("http://", true) && !text.contains("https://", true)) return true
+        val lower = text.lowercase()
+        val markers = listOf(
+            "password", "passwd", "密码", "验证码", "verification code",
+            "one-time", "one time", "otp", "2fa", "cvv", "security code",
+            "private key", "助记词", "seed phrase"
+        )
+        return markers.any { lower.contains(it) }
     }
 
     private fun extractApkUrl(text: String): String? {

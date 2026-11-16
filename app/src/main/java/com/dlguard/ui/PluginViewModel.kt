@@ -104,7 +104,11 @@ class PluginViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /** 本地 zip 安装（需在 IO 线程调用）。返回错误信息，空串表示成功。 */
-    fun installLocal(bytes: ByteArray): String = manager.installFromBytes(bytes)
+    fun installLocal(bytes: ByteArray): String =
+        manager.installFromBytes(bytes, source = "本地文件")
+
+    /** 插件的安装来源与包摘要，用于事后核对。 */
+    fun provenance(id: String): Map<String, String> = manager.provenance(id)
 
     fun refreshMarket(onMessage: (String) -> Unit) {
         manager.refreshMarket { onMessage(it) }

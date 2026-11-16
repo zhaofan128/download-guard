@@ -23,6 +23,11 @@ class GuardRepository(
 ) {
 
     private val recordDao = db.checkRecordDao()
+
+    /** 用户确认信任：结论改为 TRUSTED，记录指向恢复后的新路径。 */
+    suspend fun markTrusted(id: Long, path: String, note: String) = withContext(Dispatchers.IO) {
+        recordDao.markTrusted(id, path, note)
+    }
     private val dirDao = db.watchedDirDao()
 
     val recent: Flow<List<CheckRecord>> = recordDao.observeRecent(10)

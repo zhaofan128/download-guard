@@ -798,6 +798,19 @@ private fun DownloadCard(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f)
                     )
                 }
+                // 预期管理：测速读的是窗口内的一小段（常被 CDN 缓存命中），
+                // 全程下载几乎一定比这个数字慢，先把话说在前面。
+                val done = tuneState as? MainViewModel.TuneState.Done
+                if (done != null && done.speed > 0) {
+                    val per100Mb = (100L * 1024 * 1024 / done.speed).coerceAtLeast(1)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "按此速度下载 100MB 约 ${Formatters.durationSeconds(per100Mb)}" +
+                            "；测速只反映窗口内的瞬时速度，实际还受服务器限速与线路波动影响",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.42f)
+                    )
+                }
             }
         }
         if (tasks.isNotEmpty()) {

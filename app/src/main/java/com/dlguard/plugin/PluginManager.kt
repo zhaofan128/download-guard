@@ -567,7 +567,7 @@ class PluginManager(
     }
 
     /** 从 zip 字节安装插件（市场下载与本地文件共用）。返回错误信息，空串表示成功。 */
-    fun installFromBytes(bytes: ByteArray): String {
+    fun installFromBytes(bytes: ByteArray, source: String = "本地文件"): String {
         return try {
             val entries = LinkedHashMap<String, ByteArray>()
             ZipInputStream(bytes.inputStream()).use { zip ->
@@ -625,12 +625,49 @@ class PluginManager(
                 .putBoolean("enabled_${manifest.id}", manifest.enabledByDefault)
                 .putLong("installed_at_${manifest.id}", System.currentTimeMillis())
                 .apply()
+            writeProvenance(dir, source, bytes)
             reloadInstalled()
             ""
         } catch (e: Exception) {
             Log.w(TAG, "install failed", e)
             "安装失败：${e.message ?: e.javaClass.simpleName}"
         }
+    }
+
+    /**
+     * 记录插件包的来源与内容摘要。
+     *
+     * 插件本身是**声明式配置**（manifest.json + 资源），不能执行代码，所以没有
+     * 「插件拿到本应用权限」这条攻击面。真正需要防的是「中途被换包」：
+     * 把安装时的来源 URL 与 zip 的 SHA-256 落盘，用户事后可以核对
+     * 「我现在跑的插件，是不是当初从那个地址装的那一份」。
+     */
+    private fun writeProvenance(dir: File, source: String, bytes: ByteArray) {
+        runCatching {
+            val sha = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(bytes)
+                .joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+            File(dir, "provenance.txt").writeText(
+                buildString {
+                    appendLine("source=$source")
+                    appendLine("sha256=$sha")
+                    appendLine("bytes=${bytes.size}")
+                    appendLine("installedAt=${System.currentTimeMillis()}")
+                }
+            )
+        }
+    }
+
+    /** 读取插件的安装来源（source / sha256 / bytes / installedAt），无记录返回空。 */
+    fun provenance(id: String): Map<String, String> {
+        val file = File(installedDir(id), "provenance.txt")
+        if (!file.exists()) return emptyMap()
+        return runCatching {
+            file.readLines().mapNotNull { line ->
+                val at = line.indexOf('=')
+                if (at <= 0) null else line.substring(0, at) to line.substring(at + 1)
+            }.toMap()
+        }.getOrDefault(emptyMap())
     }
 
     fun installFromUrl(url: String, onDone: (String) -> Unit) {
@@ -666,7 +703,7 @@ class PluginManager(
             if (!response.isSuccessful) return@runCatching "下载插件包失败：HTTP ${response.code}"
             val body = response.body?.bytes() ?: return@runCatching "插件包为空"
             if (body.size > 32 * 1024 * 1024) return@runCatching "插件包超过 32MB 上限"
-            installFromBytes(body)
+            installFromBytes(body, source = url)
         }
     }.getOrElse { "下载插件包失败：${it.message ?: it.javaClass.simpleName}" }
 
@@ -692,6 +729,8 @@ class PluginManager(
                 .putBoolean("enabled_${manifest.id}", manifest.enabledByDefault)
                 .putLong("installed_at_${manifest.id}", System.currentTimeMillis())
                 .apply()
+            // 手写 JSON 的插件没有 zip 包，摘要按清单文本本身算
+            writeProvenance(dir, source = "手动创建（JSON）", bytes = text.toByteArray())
             reloadInstalled()
             ""
         } catch (e: Exception) {

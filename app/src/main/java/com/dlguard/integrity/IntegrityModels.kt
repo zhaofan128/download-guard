@@ -3,6 +3,8 @@ package com.dlguard.integrity
 /** 六类明确结论，UI 与隔离通知都直接消费该枚举。 */
 enum class Verdict(val label: String, val healthy: Boolean) {
     OK("完好", true),
+    /** 用户明确确认信任（加壳包、企业定制包等结构校验过不了但确实可用的文件）。 */
+    TRUSTED("已信任", true),
     TRUNCATED("截断", false),
     CRC_ERROR("CRC 错误", false),
     NOT_A_ZIP("非 ZIP 结构", false),

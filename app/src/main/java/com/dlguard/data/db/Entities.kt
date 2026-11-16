@@ -20,7 +20,7 @@ data class CheckRecord(
     val entriesChecked: Int = 0,
     val elapsedMs: Long = 0
 ) {
-    val healthy: Boolean get() = verdict == "OK"
+    val healthy: Boolean get() = verdict == "OK" || verdict == "TRUSTED"
 }
 
 @Entity(tableName = "watched_dirs")
