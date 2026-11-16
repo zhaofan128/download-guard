@@ -147,7 +147,9 @@ class ChunkSchedulerTest {
         scheduler.release(chunk)
         assertEquals(ChunkScheduler.NO_OWNER, chunk.owner)
         assertFalse(chunk.completed)
-        // 另一个 worker 领到同一块（重领逻辑按列表顺序，first-fit）
+        // claim 现在按游标轮转（避免 48 条连接全挤在第一块上），
+        // 所以先把其它块都占住，逼它只能领到刚释放的这一块。
+        scheduler.chunks.filter { it !== chunk }.forEach { it.owner = 77 }
         val reclaimed = scheduler.claim(5)
         assertEquals(chunk, reclaimed)
         // Range 头从断点续传

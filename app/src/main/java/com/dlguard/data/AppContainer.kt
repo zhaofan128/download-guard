@@ -32,7 +32,9 @@ class AppContainer(private val context: Context) {
 
     /** 应用级下载中心：Activity 退出后下载继续。 */
     val downloadCenter: DownloadCenter by lazy {
-        DownloadCenter(context, downloader, repository, settings)
+        DownloadCenter(context, downloader, repository, settings) {
+            pluginManager.downloadPolicy()
+        }
     }
 
     /** 插件系统：内置官方插件 + 第三方插件 + 市场索引 + 局域网下载桥。 */

@@ -47,6 +47,13 @@ class PluginManager(
         const val ID_DIRECT_SNIFF = "official.direct-sniff"
         const val ID_AUTO_TUNE = "official.auto-tune"
         const val ID_CLOUD_DIRECT = "official.cloud-direct"
+        const val ID_SPEED_LIMIT = "official.speed-limit"
+        const val ID_SMART_RETRY = "official.smart-retry"
+        const val ID_DEDUPE = "official.dedupe"
+        const val ID_NAME_CLEAN = "official.name-clean"
+        const val ID_AUTO_FOLDER = "official.auto-folder"
+        const val ID_AUTO_OPEN = "official.auto-open"
+        const val ID_CUSTOM_UA = "official.custom-ua"
 
         private const val UA = "DownloadGuard/1.4 (+https://github.com/dlguard/plugins)"
     }
@@ -224,6 +231,144 @@ class PluginManager(
                     description = "启用本插件时自动把「设置 → 下载并发连接数」设为该值；关闭插件不会改回去。"
                 )
             )
+        ),
+        PluginManifest(
+            id = ID_SPEED_LIMIT,
+            name = "限速卫士",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "给下载器加一个总带宽上限：48 条连接合计不超过设定值。" +
+                "开着视频通话、打游戏、或者热点共享给别人时，下载不再把整条宽带吃干净。",
+            category = PluginManifest.CATEGORY_ACCEL,
+            icon = "🚦",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 全局令牌桶限速，48 条连接共享一个额度\n· 限速值实时生效，无需重启下载",
+            pinned = true,
+            enabledByDefault = false,
+            config = listOf(
+                PluginConfigField(
+                    key = "limit",
+                    label = "总限速（KB/s）",
+                    type = PluginConfigField.TYPE_SLIDER,
+                    default = "1024",
+                    min = 128,
+                    max = 8192,
+                    step = 128,
+                    description = "所有连接加起来不超过这个速度。1024 KB/s 大约能同时看 4K 视频；" +
+                        "设太小会明显拖慢下载，建议先设 2048 试。"
+                )
+            )
+        ),
+        PluginManifest(
+            id = ID_SMART_RETRY,
+            name = "智能重试",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "网络抖动、服务器偶发 5xx、连接被中途掐断时，按指数退避自动重试，" +
+                "并且只重下失败的那一小块，不会从头再来。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🔁",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 重试次数可调（1~8 次）\n· 每个分块独立重试，块内最多 3 次\n· 退避间隔逐次翻倍",
+            pinned = true,
+            enabledByDefault = true,
+            config = listOf(
+                PluginConfigField(
+                    key = "attempts",
+                    label = "最多重试次数",
+                    type = PluginConfigField.TYPE_SLIDER,
+                    default = "4",
+                    min = 1,
+                    max = 8,
+                    step = 1,
+                    description = "整轮下载最多尝试几次。网络差的场景调到 6~8，代价是失败时等待更久。"
+                )
+            )
+        ),
+        PluginManifest(
+            id = ID_DEDUPE,
+            name = "重复文件跳过",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "下载前先看一眼目标目录：已有同名且大小完全一致、校验也通过的文件，就直接复用，" +
+                "不再浪费流量重下一遍。适合经常回头补同一个安装包的场景。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "♻️",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 同名 + 同大小 + 校验通过 → 直接复用\n· 大小不一致时仍然正常重下",
+            pinned = true,
+            enabledByDefault = false,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_NAME_CLEAN,
+            name = "文件名净化",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "把下载站塞进文件名里的广告去掉：「[www.xxx.com]App_v1.2.apk」变成「App_v1.2.apk」，" +
+                "「软件名_绿色版_下载之家.apk」变成「软件名.apk」。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🧼",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 去掉方括号/圆括号包裹的站点广告\n· 去掉尾部 _www.xxx.com 与「下载之家」之类后缀",
+            pinned = true,
+            enabledByDefault = true,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_AUTO_FOLDER,
+            name = "自动归档",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "按文件类型自动放进子目录：安装包进 Apps、压缩包进 Archives、视频进 Videos、" +
+                "图片进 Pictures、文档进 Documents，其余进 Others。下载目录不再是一锅粥。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🗂️",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 六类归档：Apps / Archives / Videos / Audio / Pictures / Documents / Others\n· 目录不存在自动创建，创建失败回退到下载根目录",
+            pinned = true,
+            enabledByDefault = false,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_AUTO_OPEN,
+            name = "完成即打开",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "校验通过后立刻拉起对应的应用：安装包直接进安装界面，视频用播放器打开，" +
+                "PDF 用阅读器打开。省掉「下载完 → 回桌面 → 找文件 → 点开」四步。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🚀",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 仅在校验通过后触发\n· 没有能打开该类型的应用时静默跳过",
+            pinned = true,
+            enabledByDefault = false,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_CUSTOM_UA,
+            name = "UA 伪装",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "自定义请求的 User-Agent。有些站点对非浏览器 UA 直接限速或返回错误页，" +
+                "换成桌面版 Chrome 的 UA 往往就能拿到正常速度。",
+            category = PluginManifest.CATEGORY_RESOLVER,
+            icon = "🎭",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 探测与分块请求统一使用自定义 UA\n· 留空则回退到内置移动端 Chrome UA",
+            pinned = true,
+            enabledByDefault = false,
+            config = listOf(
+                PluginConfigField(
+                    key = "ua",
+                    label = "User-Agent",
+                    type = PluginConfigField.TYPE_TEXT,
+                    default = "",
+                    description = "留空 = 内置移动端 Chrome UA。想伪装成电脑版可填：" +
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                )
+            )
         )
     )
 
@@ -269,6 +414,39 @@ class PluginManager(
 
     fun configValue(id: String, key: String, fallback: String = ""): String =
         config(id)[key]?.takeIf { it.isNotBlank() } ?: fallback
+
+    /**
+     * 把已启用插件的配置聚合成下载策略。
+     *
+     * 这里是「插件真的有用」的关键：插件不是一段说明文字，而是直接改写下载器的
+     * 限速、重试、去重、改名、归档行为。关掉插件即恢复默认，不需要重启 App。
+     */
+    fun downloadPolicy(): com.dlguard.download.DownloadPolicy {
+        val limitKb = if (isEnabled(ID_SPEED_LIMIT)) {
+            configValue(ID_SPEED_LIMIT, "limit", "1024").toIntOrNull()?.coerceIn(128, 8192) ?: 1024
+        } else {
+            0
+        }
+        val attempts = if (isEnabled(ID_SMART_RETRY)) {
+            configValue(ID_SMART_RETRY, "attempts", "4").toIntOrNull()?.coerceIn(1, 8) ?: 4
+        } else {
+            4
+        }
+        val ua = if (isEnabled(ID_CUSTOM_UA)) {
+            configValue(ID_CUSTOM_UA, "ua", "").trim()
+        } else {
+            ""
+        }
+        return com.dlguard.download.DownloadPolicy(
+            speedLimit = limitKb.toLong() * 1024L,
+            maxAttempts = attempts,
+            skipDuplicate = isEnabled(ID_DEDUPE),
+            cleanName = isEnabled(ID_NAME_CLEAN),
+            autoFolder = isEnabled(ID_AUTO_FOLDER),
+            autoOpen = isEnabled(ID_AUTO_OPEN),
+            userAgent = ua
+        )
+    }
 
     /** 写入一项配置；桥插件的端口/令牌变化会即时重启监听。 */
     fun setConfig(id: String, key: String, value: String) {

@@ -39,6 +39,8 @@ class GuardRepository(
         source: ResolvedSource,
         quarantinedPath: String?
     ): Long = withContext(Dispatchers.IO) {
+        // 覆盖同名文件后，旧记录指向同一路径：先清掉，避免「最近校验」出现两条一模一样的条目
+        runCatching { recordDao.deleteByPath(file.absolutePath) }
         recordDao.insert(
             CheckRecord(
                 filePath = file.absolutePath,

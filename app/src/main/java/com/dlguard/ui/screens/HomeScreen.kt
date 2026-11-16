@@ -36,12 +36,15 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -65,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dlguard.core.Formatters
@@ -227,7 +231,10 @@ fun HomeScreen(
                 onDismiss = viewModel::dismissDownload,
                 onMessage = viewModel::notifyMessage,
                 onOpenInPage = viewModel::openInSniffer,
-                onOpenFile = fileOpen::open
+                onOpenFile = fileOpen::open,
+                onPause = viewModel::pauseDownload,
+                onResume = viewModel::resumeDownload,
+                onConnectionsChange = viewModel::setDownloadConnections
             )
         }
         item {
@@ -667,7 +674,10 @@ private fun DownloadCard(
     onDismiss: () -> Unit,
     onMessage: (String) -> Unit,
     onOpenFile: (String) -> Unit,
-    onOpenInPage: (String) -> Unit
+    onOpenInPage: (String) -> Unit,
+    onPause: () -> Unit = {},
+    onResume: () -> Unit = {},
+    onConnectionsChange: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     GlassCard(contentPadding = PaddingValues(18.dp)) {
@@ -709,12 +719,35 @@ private fun DownloadCard(
         Spacer(Modifier.height(10.dp))
         // 主操作独占一行，次级操作放第二行：按钮文字不再被挤成两行
         if (state is DownloadUiState.Running) {
-            GuardButton(
-                text = "取消下载",
-                onClick = onCancel,
-                modifier = Modifier.fillMaxWidth(),
-                style = GuardButtonStyle.Danger
-            )
+            // 暂停与取消分开：暂停保留分片（可续传），取消才是真的丢掉这个任务
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                GuardButton(
+                    text = "暂停",
+                    onClick = onPause,
+                    modifier = Modifier.weight(1f),
+                    style = GuardButtonStyle.Glass
+                )
+                GuardButton(
+                    text = "取消下载",
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    style = GuardButtonStyle.Danger
+                )
+            }
+        } else if (state is DownloadUiState.Paused) {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                GuardButton(
+                    text = "继续下载",
+                    onClick = onResume,
+                    modifier = Modifier.weight(1f)
+                )
+                GuardButton(
+                    text = "取消",
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f),
+                    style = GuardButtonStyle.Danger
+                )
+            }
         } else {
             GuardButton(
                 text = when {
@@ -770,8 +803,13 @@ private fun DownloadCard(
             ?.joinToString("  ·  ") { "${it.concurrency}→${curveSpeed(it.bytesPerSecond)}" }
             ?.let { "$it　（MB/s）" }
             .orEmpty()
+        // 下载一开始就收起测速结论：那条绿字是针对「上一次测速的那条链接」的，
+        // 留在正在下载的卡片上方会让人以为「保持单连接」是本次下载的状态。
+        val showTuneHint = tuneHint.isNotEmpty() &&
+            state !is DownloadUiState.Running &&
+            state !is DownloadUiState.Paused
         AnimatedVisibility(
-            visible = tuneHint.isNotEmpty(),
+            visible = showTuneHint,
             enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 6 },
             exit = fadeOut(tween(160))
         ) {
@@ -803,7 +841,12 @@ private fun DownloadCard(
             Column {
                 Spacer(Modifier.height(12.dp))
                 when (state) {
-                    is DownloadUiState.Running -> DownloadProgressCard(state)
+                    is DownloadUiState.Running -> DownloadProgressCard(state, onConnectionsChange)
+                    is DownloadUiState.Paused -> PausedCard(
+                        state = state,
+                        onResume = onResume,
+                        onCancel = onCancel
+                    )
                     is DownloadUiState.Success -> ResultBanner(
                         success = true,
                         title = "下载完成 · 校验通过",
@@ -835,7 +878,10 @@ private fun DownloadCard(
 }
 
 @Composable
-private fun DownloadProgressCard(state: DownloadUiState.Running) {
+private fun DownloadProgressCard(
+    state: DownloadUiState.Running,
+    onConnectionsChange: (Int) -> Unit
+) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -887,7 +933,11 @@ private fun DownloadProgressCard(state: DownloadUiState.Running) {
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
                 Text(
-                    text = if (state.connections > 1) "${state.connections} 连接" else "单连接",
+                    text = when {
+                        state.connections > 1 -> "${state.connections} 连接"
+                        state.connections == 1 -> "单连接"
+                        else -> "准备中"
+                    },
                     style = MonoSmallStyle,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                 )
@@ -910,6 +960,123 @@ private fun DownloadProgressCard(state: DownloadUiState.Running) {
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                 )
             }
+            if (state.hotSwitchable) {
+                Spacer(Modifier.height(10.dp))
+                HotSwitchSlider(
+                    current = state.connections,
+                    onChange = onConnectionsChange
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 下载中的并发热切换滑杆。
+ *
+ * 关键点：拖动时用本地值渲染，不被后台 250ms 一次的进度回调「拉回去」；
+ * 松手后交还给真实状态，所以既跟手又不会抖。
+ */
+@Composable
+private fun HotSwitchSlider(current: Int, onChange: (Int) -> Unit) {
+    var dragging by remember { mutableStateOf(false) }
+    var local by remember { mutableIntStateOf(current.coerceIn(1, 48)) }
+    LaunchedEffect(current) {
+        if (!dragging) local = current.coerceIn(1, 48)
+    }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "并发连接",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "热切换 · 不中断下载",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "$local",
+                style = MonoSmallStyle,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Slider(
+            value = local.toFloat(),
+            onValueChange = {
+                dragging = true
+                val next = it.roundToInt().coerceIn(1, 48)
+                if (next != local) {
+                    local = next
+                    onChange(next)
+                }
+            },
+            onValueChangeFinished = { dragging = false },
+            valueRange = 1f..48f,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+/** 暂停态卡片：进度已落盘，给一条明确的「继续」路径。 */
+@Composable
+private fun PausedCard(
+    state: DownloadUiState.Paused,
+    onResume: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val fraction = if (state.total > 0) {
+        (state.downloaded.toFloat() / state.total).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .liquidGlass(
+                cornerRadius = 18.dp,
+                config = LocalGlassConfig.current,
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
+                elevation = 2.dp
+            )
+            .padding(14.dp)
+    ) {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = state.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "已暂停",
+                    style = MonoSmallStyle,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            JellyProgressBarComponent(progress = fraction, active = false)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = buildString {
+                    append(Formatters.bytes(state.downloaded))
+                    if (state.total > 0) append(" / ${Formatters.bytes(state.total)}")
+                    append("　·　分片已保留，继续时从断点接着下")
+                },
+                style = MonoSmallStyle,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+            )
         }
     }
 }

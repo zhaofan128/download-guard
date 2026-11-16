@@ -31,11 +31,15 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
         /** 常规窃取的最小剩余：低于 1MB 拆出来的块不值得一次 RTT。 */
         const val MIN_STEAL_BYTES = 1L * 1024 * 1024
 
-        /** 尾段再平衡的最小剩余：收到 256KB 一级，保证 48 条连接都能分到活。 */
-        const val MIN_REBALANCE_BYTES = 256L * 1024
+        /**
+         * 尾段再平衡的最小剩余。
+         * 从 256KB 降到 64KB：84MB 的文件按 1MB 切只有 84 块，48 条连接在最后 20MB
+         * 会退化成一两块在跑；64KB 一级能让每条连接都攥着一小块同时收尾。
+         */
+        const val MIN_REBALANCE_BYTES = 64L * 1024
 
-        /** 单块最多被拆几次（每拆一次减半，6 层 = 最细 1/64）。 */
-        const val MAX_SPLIT_DEPTH = 6
+        /** 单块最多被拆几次（每拆一次减半）。10 层 + 64KB 下限，足够把尾段摊到 48 条连接。 */
+        const val MAX_SPLIT_DEPTH = 10
 
         const val NO_OWNER = -1
         const val MAX_BLOCKS = 256
@@ -63,6 +67,9 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
     }
 
     private val chunkList: MutableList<Chunk> = buildChunks(totalBytes, requestedBlocks).toMutableList()
+
+    /** 领取游标：让并发 worker 分散到不同块，减少同一把锁上的争抢。 */
+    private val cursor = java.util.concurrent.atomic.AtomicInteger(0)
 
     /** 只读视图：下载器持久化元数据与统计进度时遍历使用。 */
     val chunks: List<Chunk> get() = chunkList
@@ -105,7 +112,12 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
      */
     fun claim(workerId: Int): Chunk? {
         synchronized(this) {
-            for (chunk in chunks) {
+            val n = chunkList.size
+            if (n == 0) return null
+            // 从游标处开始扫：48 个 worker 同时 claim 时不会全挤在第 0 块上抢同一把锁的同一段
+            val begin = (cursor.getAndIncrement() and Int.MAX_VALUE) % n
+            for (i in 0 until n) {
+                val chunk = chunkList[(begin + i) % n]
                 if (chunk.completed) continue
                 if (chunk.owner != NO_OWNER) continue
                 chunk.owner = workerId

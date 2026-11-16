@@ -12,10 +12,20 @@ sealed interface DownloadUiState {
         val speed: Long,
         val attempt: Int,
         val connections: Int = 1,
-        val etaSeconds: Long = -1
+        val etaSeconds: Long = -1,
+        /** 走分块调度时可以在下载中直接改并发；单连接流式下载时为 false。 */
+        val hotSwitchable: Boolean = false
+    ) : DownloadUiState
+
+    /** 用户主动暂停：分片已落盘，点继续按断点续传。 */
+    data class Paused(
+        val fileName: String,
+        val downloaded: Long,
+        val total: Long
     ) : DownloadUiState
 
     data class Success(val fileName: String, val path: String, val summary: String) : DownloadUiState
+
     data class Failed(
         val message: String,
         /** 失败任务的原始 URL，用于「改用网页模式」重试。 */

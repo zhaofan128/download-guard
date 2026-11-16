@@ -39,6 +39,10 @@ interface CheckRecordDao {
     @Query("SELECT * FROM check_records WHERE filePath = :path AND sizeBytes = :size ORDER BY checkedAt DESC LIMIT 1")
     suspend fun findByPathAndSize(path: String, size: Long): CheckRecord?
 
+    /** 同一路径只保留最新一条：重下同一个文件不该在列表里堆出两条同名记录。 */
+    @Query("DELETE FROM check_records WHERE filePath = :path")
+    suspend fun deleteByPath(path: String)
+
     @Query("UPDATE check_records SET quarantinedPath = :path WHERE id = :id")
     suspend fun setQuarantinePath(id: Long, path: String?)
 

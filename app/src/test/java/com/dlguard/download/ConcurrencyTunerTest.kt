@@ -41,19 +41,27 @@ class ConcurrencyTunerTest {
     }
 
     @Test
-    fun `recommendation never goes below eight connections`() {
-        // 单连接就摸到带宽上限：工程最优是 1，但对用户应给 8（抗抖动）
-        val probes = listOf(probe(1, 4.40), probe(2, 4.40), probe(4, 4.40))
-        val result = tuner(current = 4).decide(probes)
-
-        // 用户当前 4 连接也达标 → 先保留 4，不强行改成 8
-        assertEquals(4, result.best)
-        assertTrue(result.keptCurrent)
-
-        // 没有「当前设置」时按工程下限给 8
+    fun `recommendation picks the peak concurrency`() {
+        // 用户要的是「最快」，不是「最省资源」：峰值在哪一档就推哪一档。
+        val probes = listOf(probe(16, 2.0), probe(48, 5.6))
         val fresh = tuner(current = 0).decide(probes)
-        assertEquals(ConcurrencyTuner.MIN_RECOMMENDED, fresh.best)
+        assertEquals(48, fresh.best)
         assertFalse(fresh.keptCurrent)
+
+        // 当前设置恰好就是峰值档 → 保留，不做无谓改动
+        val kept = tuner(current = 48).decide(probes)
+        assertEquals(48, kept.best)
+        assertTrue(kept.keptCurrent)
+    }
+
+    @Test
+    fun `low bandwidth still recommends peak when peak is low concurrency`() {
+        // 服务器对高并发惩罚：16 比 48 快 → 推荐 16，而不是硬塞 48
+        val probes = listOf(probe(16, 3.4), probe(48, 1.2))
+        val result = tuner(current = 0).decide(probes)
+        assertEquals(16, result.best)
+        // probe() 把 MB/s 换算成字节，直接跟探针对齐，别手写魔数
+        assertEquals(probes[0].bytesPerSecond, result.bestSpeed)
     }
 
     @Test

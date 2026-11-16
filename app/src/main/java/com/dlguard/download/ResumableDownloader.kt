@@ -10,6 +10,7 @@ import com.dlguard.integrity.ApkIntegrityChecker
 import com.dlguard.integrity.IntegrityResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -29,8 +30,11 @@ import java.io.IOException
 import java.io.RandomAccessFile
 import java.net.URI
 import java.net.URLDecoder
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
 
 data class DownloadProgress(
@@ -38,7 +42,9 @@ data class DownloadProgress(
     val totalBytes: Long,
     val bytesPerSecond: Long,
     val attempt: Int,
-    val connections: Int = 1
+    val connections: Int = 1,
+    /** true = 走分块调度，可以在下载过程中热切换并发；false = 单连接流式，切了也没用。 */
+    val segmented: Boolean = false
 ) {
     val fraction: Float
         get() = if (totalBytes > 0) (downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 1f) else 0f
@@ -62,7 +68,9 @@ data class DownloadOutcome(
     val connections: Int = 1,
     val contentType: String? = null,
     /** 服务器返回的 HTTP 状态码（网络层失败时为空），供 UI 判断能否「改用网页模式」。 */
-    val httpCode: Int? = null
+    val httpCode: Int? = null,
+    /** 落盘时发现同名文件，已用本次结果替换（而不是生成「xxx(1).apk」）。 */
+    val replacedExisting: Boolean = false
 ) {
     val success: Boolean get() = file != null && error == null
     val averageSpeed: Long
@@ -182,10 +190,45 @@ class ResumableDownloader(
         }
     }
 
+    /**
+     * 下载进行中可改的并发闸门。
+     *
+     * 为什么需要：旧版并发数在 `start()` 时被固化成一个 Int 传给调度器，
+     * 想改只能取消重下（分片虽然保留了，但重连、重新探测、重新排队要十几秒）。
+     * 现在 UI 拖滑杆只改这里的值，[runSegmented] 的调度协程在 250ms 内增删 worker，
+     * 已有连接不受影响、一块进度都不丢。
+     */
+    class ConnectionGovernor(initial: Int) {
+        private val target = AtomicInteger(initial.coerceIn(1, MAX_CONNECTIONS))
+
+        /** 当前期望的并行 worker 数。 */
+        val wanted: Int get() = target.get()
+
+        /** 请求切到 n 连接；越界自动收敛到 1~48。 */
+        fun request(n: Int) {
+            target.set(n.coerceIn(1, MAX_CONNECTIONS))
+        }
+    }
+
+    /**
+     * worker 的「退役」信号：并发下调时多出来的 worker 用它主动收尾。
+     *
+     * 故意**不继承 CancellationException**——父协程会把任何 CancellationException
+     * 当成自己也被取消，整条下载链会跟着断掉，这里只是这一个 worker 该下班了。
+     */
+    private class RetireRequested : Exception("worker 按新并发数退役")
+
     private class RangeUnsupportedException : IOException("服务器忽略 Range 请求")
     private class StaleRemoteException(message: String) : IOException(message)
     private class WifiBlockedException(message: String) : IOException(message)
     private class HttpStatusException(val code: Int, message: String) : IOException(message)
+
+    /** 一个下载 worker 的句柄：id 用于挑连接池，retire 用于并发下调时让它优雅收尾。 */
+    private class WorkerHandle(
+        val id: Int,
+        val retire: AtomicBoolean,
+        val job: Job
+    )
 
     private data class RemoteInfo(
         val totalBytes: Long,
@@ -209,6 +252,10 @@ class ResumableDownloader(
         referer: String? = null,
         /** 网页嗅探场景：部分直链依赖登录态 Cookie。 */
         cookie: String? = null,
+        /** 并发闸门：传进来后可在下载过程中热切换连接数，不传则按 [connections] 固定。 */
+        governor: ConnectionGovernor? = null,
+        /** 插件聚合出的行为策略：限速、重试、去重、改名、归档。 */
+        policy: DownloadPolicy = DownloadPolicy(),
         onProgress: (DownloadProgress) -> Unit = {}
     ): DownloadOutcome = withContext(Dispatchers.IO) {
         val startedAt = SystemClock.elapsedRealtime()
@@ -219,13 +266,15 @@ class ResumableDownloader(
                 url = trimmedUrl
             )
         }
+        val ua = policy.userAgent.takeIf { it.isNotBlank() } ?: UA
+        val limiter = RateLimiter(policy.speedLimit)
         val parsed = runCatching { URI(trimmedUrl) }.getOrNull()
         if (parsed == null || (parsed.scheme != "http" && parsed.scheme != "https")) {
             return@withContext DownloadOutcome(error = "链接无效，仅支持 http/https：$url", url = trimmedUrl)
         }
 
         val remote = try {
-            probe(trimmedUrl, referer, cookie)
+            probe(trimmedUrl, ua, referer, cookie)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -234,29 +283,52 @@ class ResumableDownloader(
                 url = trimmedUrl
             )
         }
-        val targetDir = resolveTargetDir()
-        val fileName = resolveFileName(trimmedUrl, preferredName, remote)
+        val fileName = resolveFileName(trimmedUrl, preferredName, remote, policy)
+        val targetDir = resolveTargetDir(fileName, policy)
         val part = File(targetDir, "$fileName.part")
         val metaFile = File(targetDir, "$fileName.part.meta")
+
+        // 去重：目标位置已有同大小文件时不再重下，直接走一次校验当作本次结果
+        if (policy.skipDuplicate && remote.totalBytes > 0) {
+            val existing = File(targetDir, fileName)
+            if (existing.exists() && existing.length() == remote.totalBytes) {
+                val check = checker.check(existing, remote.totalBytes)
+                if (check.healthy) {
+                    RecentWrites.mark(existing.absolutePath)
+                    return@withContext DownloadOutcome(
+                        file = existing,
+                        integrity = check,
+                        url = trimmedUrl,
+                        bytes = existing.length(),
+                        elapsedMs = 0,
+                        connections = 0,
+                        contentType = remote.contentType
+                    )
+                }
+            }
+        }
 
         var lastError: String? = null
         var lastHttpCode: Int? = null
         var multiAllowed = remote.rangeSupported && remote.totalBytes > 0
         var forceFresh = false
-        val workerCount = connections.coerceIn(1, MAX_CONNECTIONS)
+        val gate = governor ?: ConnectionGovernor(connections)
+        val workerCount = gate.wanted
 
-        for (attempt in 1..MAX_ATTEMPTS) {
+        val maxAttempts = policy.maxAttempts.coerceIn(1, 8)
+        for (attempt in 1..maxAttempts) {
             try {
                 if (forceFresh) {
                     DownloadMeta.delete(metaFile)
                     part.delete()
                     forceFresh = false
                 }
-                val outcome = if (multiAllowed && workerCount > 1) {
+                val outcome = if (multiAllowed) {
                     try {
                         runSegmented(
                             url = trimmedUrl, part = part, metaFile = metaFile, targetDir = targetDir,
-                            fileName = fileName, remote = remote, connections = workerCount, attempt = attempt,
+                            fileName = fileName, remote = remote, connections = workerCount,
+                            governor = gate, attempt = attempt, ua = ua, limiter = limiter,
                             requireWifi = requireWifi, startedAt = startedAt,
                             referer = referer, cookie = cookie, onProgress = onProgress
                         )
@@ -269,6 +341,7 @@ class ResumableDownloader(
                             url = trimmedUrl, part = part, metaFile = metaFile, targetDir = targetDir,
                             fileName = fileName, remote = remote, attempt = attempt,
                             requireWifi = requireWifi, startedAt = startedAt,
+                            ua = ua, limiter = limiter,
                             referer = referer, cookie = cookie, onProgress = onProgress
                         )
                     }
@@ -277,6 +350,7 @@ class ResumableDownloader(
                         url = trimmedUrl, part = part, metaFile = metaFile, targetDir = targetDir,
                         fileName = fileName, remote = remote, attempt = attempt,
                         requireWifi = requireWifi, startedAt = startedAt,
+                        ua = ua, limiter = limiter,
                         referer = referer, cookie = cookie, onProgress = onProgress
                     )
                 }
@@ -299,21 +373,22 @@ class ResumableDownloader(
             } catch (e: Exception) {
                 lastError = "${e.javaClass.simpleName}: ${e.message ?: "未知网络错误"}"
             }
-            if (attempt < MAX_ATTEMPTS) {
+            if (attempt < maxAttempts) {
                 onProgress(
                     DownloadProgress(
                         downloadedBytes = if (part.exists()) part.length() else 0,
                         totalBytes = remote.totalBytes,
                         bytesPerSecond = 0,
                         attempt = attempt + 1,
-                        connections = 0
+                        connections = gate.wanted,
+                        segmented = multiAllowed
                     )
                 )
                 delay(1000L shl (attempt - 1))
             }
         }
         DownloadOutcome(
-            error = "已重试 $MAX_ATTEMPTS 次仍失败：$lastError。已下载分片保留在 ${part.absolutePath}，可再次点击继续续传",
+            error = "已重试 $maxAttempts 次仍失败：$lastError。已下载分片保留在 ${part.absolutePath}，可再次点击继续续传",
             url = trimmedUrl,
             httpCode = lastHttpCode
         )
@@ -342,12 +417,17 @@ class ResumableDownloader(
         if (!cookie.isNullOrBlank()) header("Cookie", cookie)
     }
 
-    private fun probe(url: String, referer: String? = null, cookie: String? = null): RemoteInfo {
+    private fun probe(
+        url: String,
+        ua: String,
+        referer: String? = null,
+        cookie: String? = null
+    ): RemoteInfo {
         val rangeRequest = Request.Builder()
             .url(url)
             .header("Range", "bytes=0-0")
             .header("Accept-Encoding", "identity")
-            .header("User-Agent", UA)
+            .header("User-Agent", ua)
             .sniffHeaders(referer, cookie)
             .get()
             .build()
@@ -396,7 +476,7 @@ class ResumableDownloader(
             if (e.code != 405 && e.code != 400 && e.code != 501 && e.code != 403) throw e
         }
         // Range 探测被拒：退回 HEAD（有些服务器只允许 HEAD 拿长度）
-        head(url, referer, cookie)?.let { return it }
+        head(url, ua, referer, cookie)?.let { return it }
         // HEAD 也不行：不当作致命错误，降级为「总长未知 + 不支持分段」的单流下载。
         // 大量下载站/CDN 会拒绝 HEAD 与 Range，但 GET 正常返回 200，硬失败会白白错过。
         return RemoteInfo(
@@ -410,12 +490,12 @@ class ResumableDownloader(
         )
     }
 
-    private fun head(url: String, referer: String? = null, cookie: String? = null): RemoteInfo? {
+    private fun head(url: String, ua: String, referer: String? = null, cookie: String? = null): RemoteInfo? {
         val request = Request.Builder()
             .url(url)
             .head()
             .header("Accept-Encoding", "identity")
-            .header("User-Agent", UA)
+            .header("User-Agent", ua)
             .sniffHeaders(referer, cookie)
             .build()
         return runCatching {
@@ -446,7 +526,10 @@ class ResumableDownloader(
         fileName: String,
         remote: RemoteInfo,
         connections: Int,
+        governor: ConnectionGovernor,
         attempt: Int,
+        ua: String,
+        limiter: RateLimiter,
         requireWifi: Boolean,
         startedAt: Long,
         referer: String? = null,
@@ -476,24 +559,75 @@ class ResumableDownloader(
 
         // 全局 ticker 用独立句柄统一 sync（32 个 worker 各自 fsync 会把 eMMC 打爆）
         val syncHandle = runCatching { RandomAccessFile(part, "rw") }.getOrNull()
-        var lastGlobalSync = SystemClock.elapsedRealtime()
+        // 全局 sync 节流阀：48 个 worker 同时 fsync 同一个文件会互相阻塞（内核按 inode 加锁），
+        // 实测这是高并发下速度掉到几十 KB/s 的主因之一。改成谁先抢到谁刷，一次刷全文件。
+        val syncGate = AtomicLong(SystemClock.elapsedRealtime())
 
         val clients = segmentClients
-        val jobs = (0 until connections).map { workerId ->
-            async(Dispatchers.IO) {
-                workerLoop(
-                    workerId = workerId,
-                    scheduler = scheduler,
-                    url = downloadUrl,
-                    part = part,
-                    etag = remote.etag,
-                    total = total,
-                    httpClient = clients[workerId % clients.size],
-                    stopped = stopped,
-                    referer = referer,
-                    cookie = cookie,
-                    onBytes = { dirty.set(true) }
-                )
+        // 空闲连接池：worker id 会随热切换不断增长，若仍用 id % size 取 client，
+        // 超过 48 次增删后两条活跃 worker 会撞到同一个连接池，后者只能排队等前者释放。
+        val freeClients = java.util.concurrent.ConcurrentLinkedQueue<Int>()
+        clients.indices.forEach { freeClients.offer(it) }
+        val fatal = AtomicReference<Throwable?>(null)
+        val workers = ConcurrentHashMap<Int, WorkerHandle>()
+        val idSeq = AtomicInteger(0)
+
+        /** 拉起一个 worker；id 只增不复用，保证每个 worker 独占一个连接池。 */
+        fun spawnWorker() {
+            val id = idSeq.getAndIncrement()
+            val retire = AtomicBoolean(false)
+            val poolIndex = freeClients.poll() ?: (id % clients.size)
+            val job = launch(Dispatchers.IO) {
+                try {
+                    workerLoop(
+                        workerId = id,
+                        scheduler = scheduler,
+                        url = downloadUrl,
+                        part = part,
+                        etag = remote.etag,
+                        total = total,
+                        httpClient = clients[poolIndex],
+                        stopped = stopped,
+                        retire = retire,
+                        syncGate = syncGate,
+                        ua = ua,
+                        limiter = limiter,
+                        referer = referer,
+                        cookie = cookie,
+                        onBytes = { dirty.set(true) }
+                    )
+                } catch (_: RetireRequested) {
+                    // 并发下调：这个 worker 正常下班，手里的块已 release，别人能接着下
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (e: Throwable) {
+                    if (fatal.compareAndSet(null, e)) stopped.set(true)
+                } finally {
+                    // 归还连接池槽位，后续新增 worker 才能拿到一条没人用的 TCP
+                    freeClients.offer(poolIndex)
+                }
+            }
+            workers[id] = WorkerHandle(id, retire, job)
+        }
+
+        repeat(connections.coerceAtLeast(1)) { spawnWorker() }
+
+        // 热切换控制器：只比对「期望值」，真正增删 worker 放到后台，滑杆拖动不会卡 UI
+        val controller = launch(Dispatchers.IO) {
+            var lastWanted = connections
+            while (isActive && !stopped.get()) {
+                delay(250)
+                val want = governor.wanted
+                if (want == lastWanted) continue
+                lastWanted = want
+                val live = workers.values.filter { !it.retire.get() && it.job.isActive }
+                when {
+                    want > live.size -> repeat(want - live.size) { spawnWorker() }
+                    want < live.size -> live.sortedByDescending { it.id }
+                        .take(live.size - want)
+                        .forEach { it.retire.set(true) }
+                }
+                workers.entries.removeIf { it.value.job.isCompleted }
             }
         }
 
@@ -505,13 +639,14 @@ class ResumableDownloader(
                 if (requireWifi && !isOnWifi()) {
                     wifiLost.set(true)
                     stopped.set(true)
-                    jobs.forEach { it.cancel() }
+                    workers.values.forEach { runCatching { it.job.cancel() } }
                     return@launch
                 }
-                if (now - lastGlobalSync >= GLOBAL_SYNC_INTERVAL_MS) {
+                if (now - syncGate.get() >= GLOBAL_SYNC_INTERVAL_MS &&
+                    syncGate.compareAndSet(syncGate.get(), now)
+                ) {
                     runCatching { syncHandle?.fd?.sync() }
                     dirty.set(true)
-                    lastGlobalSync = now
                 }
                 if (now - lastEmit >= PROGRESS_INTERVAL_MS) {
                     lastEmit = now
@@ -522,7 +657,8 @@ class ResumableDownloader(
                             totalBytes = total,
                             bytesPerSecond = meter.sample(downloaded),
                             attempt = attempt,
-                            connections = connections
+                            connections = governor.wanted,
+                            segmented = true
                         )
                     )
                     if (dirty.get() && now - lastMetaFlush.get() >= META_FLUSH_INTERVAL_MS) {
@@ -535,12 +671,23 @@ class ResumableDownloader(
         }
 
         try {
-            jobs.awaitAll()
+            // 不能只等初始那批：热切换会随时新增 worker，所以循环盯「还有没有活的」
+            while (!stopped.get()) {
+                if (workers.values.none { it.job.isActive }) break
+                delay(80)
+            }
+            val stillPending = scheduler.unfinishedCount()
+            if (!stopped.get() && stillPending > 0) {
+                throw IOException("所有连接已退出，仍有 $stillPending 个分块未完成")
+            }
+            fatal.get()?.let { throw it }
         } catch (e: CancellationException) {
             if (wifiLost.get()) throw WifiBlockedException("网络已从 Wi-Fi 切换到移动数据，按设置暂停下载")
             throw e
         } finally {
             stopped.set(true)
+            controller.cancel()
+            workers.values.forEach { runCatching { it.job.cancel() } }
             ticker.cancel()
             runCatching { syncHandle?.fd?.sync() }
             runCatching { syncHandle?.close() }
@@ -554,7 +701,8 @@ class ResumableDownloader(
                 totalBytes = total,
                 bytesPerSecond = meter.sample(downloaded),
                 attempt = attempt,
-                connections = connections
+                connections = governor.wanted,
+                segmented = true
             )
         )
         if (!scheduler.isComplete(total)) {
@@ -582,12 +730,16 @@ class ResumableDownloader(
         total: Long,
         httpClient: OkHttpClient,
         stopped: AtomicBoolean,
+        retire: AtomicBoolean = AtomicBoolean(false),
+        syncGate: AtomicLong = AtomicLong(SystemClock.elapsedRealtime()),
+        ua: String = UA,
+        limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
         onBytes: (Long) -> Unit
     ) {
         var idleWait = WORKER_IDLE_WAIT_MS
-        while (!stopped.get()) {
+        while (!stopped.get() && !retire.get()) {
             currentCoroutineContext().ensureActive()
             var chunk = scheduler.claim(workerId)
             if (chunk == null) chunk = scheduler.steal(workerId)
@@ -609,7 +761,10 @@ class ResumableDownloader(
             var lastError: String? = null
             while (attempt < CHUNK_RETRY && !stopped.get()) {
                 try {
-                    downloadChunk(chunk, url, part, etag, total, httpClient, referer, cookie, onBytes)
+                    downloadChunk(
+                        chunk, url, part, etag, total, httpClient, retire, syncGate,
+                        ua, limiter, referer, cookie, onBytes
+                    )
                     success = true
                     break
                 } catch (cancel: CancellationException) {
@@ -621,6 +776,10 @@ class ResumableDownloader(
                 } catch (fatal: StaleRemoteException) {
                     scheduler.release(chunk)
                     throw fatal
+                } catch (retireSignal: RetireRequested) {
+                    // 退役不是错误：把块还回去就走，绝不能被下面的重试逻辑吞掉
+                    scheduler.release(chunk)
+                    throw retireSignal
                 } catch (e: Exception) {
                     attempt++
                     lastError = "${e.javaClass.simpleName}: ${e.message ?: "未知错误"}"
@@ -650,6 +809,10 @@ class ResumableDownloader(
         etag: String?,
         total: Long,
         httpClient: OkHttpClient,
+        retire: AtomicBoolean = AtomicBoolean(false),
+        syncGate: AtomicLong = AtomicLong(SystemClock.elapsedRealtime()),
+        ua: String = UA,
+        limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
         onBytes: (Long) -> Unit
@@ -657,6 +820,9 @@ class ResumableDownloader(
         val start = chunk.start
         var requestCount = 0
         while (true) {
+            // 并发下调 / 用户取消：在两次请求之间就退出，不必等整块下完
+            if (retire.get()) throw RetireRequested()
+            currentCoroutineContext().ensureActive()
             val done = chunk.done.get().coerceIn(0L, chunk.endInclusive - start + 1)
             val limit = chunk.endInclusive
             if (start + done > limit) return // 块已完结（可能被窃取后自己那半也写完了）
@@ -667,12 +833,19 @@ class ResumableDownloader(
                 .url(url)
                 .header("Range", "bytes=${start + done}-$limit")
                 .header("Accept-Encoding", "identity")
-                .header("User-Agent", UA)
+                .header("User-Agent", ua)
                 .sniffHeaders(referer, cookie)
                 .get()
             if (!etag.isNullOrBlank()) requestBuilder.header("If-Range", etag)
 
-            httpClient.newCall(requestBuilder.build()).execute().use { response ->
+            val call = httpClient.newCall(requestBuilder.build())
+            // 取消/暂停时协程只是被标记，阻塞中的 socket read 不会自己醒；
+            // 这里把 Call 挂到协程完成回调上，取消瞬间直接 cancel 掉这条连接。
+            val cancelHandle = currentCoroutineContext()[Job]?.invokeOnCompletion {
+                runCatching { call.cancel() }
+            }
+            try {
+            call.execute().use { response ->
                 if (response.code == 200) throw RangeUnsupportedException()
                 if (response.code == 416) {
                     if (start + done > limit) return
@@ -708,23 +881,29 @@ class ResumableDownloader(
                                 "分块 [$start-$currentLimit] 提前结束，还差 $remaining 字节"
                             )
                         }
+                        // 旧版缺这一行：job.cancel() 之后阻塞的 read 照样返回数据，
+                        // 于是「取消」变成「继续下」，界面还会被旧任务的 onProgress 反复覆盖。
+                        currentCoroutineContext().ensureActive()
+                        if (retire.get()) throw RetireRequested()
+                        if (limiter.enabled) limiter.acquire(read)
                         raf.write(buffer, 0, read)
                         chunk.done.addAndGet(read.toLong())
                         onBytes(read.toLong())
                         sinceSync += read
-                        val now = SystemClock.elapsedRealtime()
-                        if (sinceSync >= FSYNC_BYTES || now - lastSyncAt >= FSYNC_INTERVAL_MS) {
-                            raf.fd.sync()
-                            sinceSync = 0
-                            lastSyncAt = now
-                        }
                     }
                     // 块写入完成：大块强制 fsync（可靠性锚点）；尾段几百 KB 的小块
                     // 不单独 sync，交给全局 ticker 每 4 秒兜底，避免几十次 sync 拖慢收尾。
                     if (chunk.endInclusive - chunk.start + 1 >= SMALL_CHUNK_SYNC_SKIP) {
-                        raf.fd.sync()
+                        val now = SystemClock.elapsedRealtime()
+                        val last = syncGate.get()
+                        if (now - last >= 2_000L && syncGate.compareAndSet(last, now)) {
+                            raf.fd.sync()
+                        }
                     }
                 }
+            }
+            } finally {
+                cancelHandle?.dispose()
             }
         }
     }
@@ -741,6 +920,8 @@ class ResumableDownloader(
         attempt: Int,
         requireWifi: Boolean,
         startedAt: Long,
+        ua: String = UA,
+        limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
         onProgress: (DownloadProgress) -> Unit
@@ -761,14 +942,18 @@ class ResumableDownloader(
         val requestBuilder = Request.Builder()
             .url(remote.downloadUrl(url))
             .header("Accept-Encoding", "identity")
-            .header("User-Agent", UA)
+            .header("User-Agent", ua)
             .sniffHeaders(referer, cookie)
             .get()
         if (existing > 0L) requestBuilder.header("Range", "bytes=$existing-")
         if (!remote.etag.isNullOrBlank() && existing > 0L) requestBuilder.header("If-Range", remote.etag)
 
         val meter = SpeedWindow()
-        client.newCall(requestBuilder.build()).execute().use { response ->
+        val call = client.newCall(requestBuilder.build())
+        // 协程一旦取消就掐断这条 socket：阻塞中的 read 不会自己醒来，
+        // 否则用户点了取消要等 readTimeout（60 秒）才真正停。
+        currentCoroutineContext()[Job]?.invokeOnCompletion { runCatching { call.cancel() } }
+        call.execute().use { response ->
             if (response.code == 416) {
                 if (existing > 0L && (expectedTotal <= 0 || existing >= expectedTotal)) {
                     return finalize(
@@ -812,8 +997,11 @@ class ResumableDownloader(
                 val stream = body.byteStream()
                 val buffer = ByteArray(BUFFER)
                 while (true) {
+                    currentCoroutineContext().ensureActive()
                     val read = stream.read(buffer)
                     if (read <= 0) break
+                    currentCoroutineContext().ensureActive()
+                    if (limiter.enabled) limiter.acquire(read)
                     raf.write(buffer, 0, read)
                     done += read
                     sinceSync += read
@@ -959,14 +1147,24 @@ class ResumableDownloader(
                 url = url
             )
         }
+        // 同名文件：默认**替换**，不再生成「xxx(1).apk」。
+        // 旧行为下用户重下一个文件，目录里会躺两份一模一样的安装包，谁也分不清哪份是新的，
+        // 「最近校验」里还会出现两条同名记录。
         var target = File(targetDir, fileName)
-        var index = 1
-        while (target.exists()) {
-            val dot = fileName.lastIndexOf('.')
-            val base = if (dot > 0) fileName.substring(0, dot) else fileName
-            val ext = if (dot > 0) fileName.substring(dot) else ""
-            target = File(targetDir, "${base}($index)$ext")
-            index++
+        var replaced = false
+        if (target.exists()) {
+            replaced = target.delete()
+            if (!replaced) {
+                // 删不掉（被其它应用占用、只读挂载）才退化成加序号，至少不会让本次下载白跑
+                var index = 1
+                val dot = fileName.lastIndexOf('.')
+                val base = if (dot > 0) fileName.substring(0, dot) else fileName
+                val ext = if (dot > 0) fileName.substring(dot) else ""
+                while (target.exists()) {
+                    target = File(targetDir, "${base}($index)$ext")
+                    index++
+                }
+            }
         }
         val renamed = try {
             part.renameTo(target)
@@ -993,7 +1191,8 @@ class ResumableDownloader(
             bytes = downloaded,
             elapsedMs = elapsedMs,
             connections = connections,
-            contentType = contentType
+            contentType = contentType,
+            replacedExisting = replaced
         )
     }
 
@@ -1039,6 +1238,25 @@ class ResumableDownloader(
             capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
+    /** 按插件策略把文件归档到分类子目录；关掉策略时就是下载根目录。 */
+    private fun resolveTargetDir(fileName: String, policy: DownloadPolicy): File {
+        val base = resolveTargetDir()
+        if (!policy.autoFolder) return base
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        val folder = when (ext) {
+            "apk", "apks", "xapk", "apkm" -> "Apps"
+            "zip", "7z", "rar", "tar", "gz" -> "Archives"
+            "mp4", "mkv", "avi", "mov", "webm" -> "Videos"
+            "mp3", "flac", "wav", "m4a", "aac" -> "Audio"
+            "jpg", "jpeg", "png", "gif", "webp", "heic" -> "Pictures"
+            "pdf", "epub", "mobi", "txt", "doc", "docx", "xls", "xlsx", "ppt", "pptx" -> "Documents"
+            else -> "Others"
+        }
+        val dir = File(base, folder)
+        if (!dir.exists() && !dir.mkdirs()) return base
+        return if (dir.canWrite()) dir else base
+    }
+
     private fun resolveTargetDir(): File {
         val public = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (public != null && (public.exists() || public.mkdirs()) && public.canWrite()) return public
@@ -1050,8 +1268,16 @@ class ResumableDownloader(
         return context.filesDir
     }
 
-    private fun resolveFileName(url: String, preferredName: String?, remote: RemoteInfo): String {
-        val preferred = preferredName?.takeIf { it.isNotBlank() }?.let { Formatters.safeFileName(it) }
+    private fun resolveFileName(
+        url: String,
+        preferredName: String?,
+        remote: RemoteInfo,
+        policy: DownloadPolicy
+    ): String {
+        val rawPreferred = preferredName?.takeIf { it.isNotBlank() }
+        val preferred = rawPreferred
+            ?.let { if (policy.cleanName) cleanFileName(it) else it }
+            ?.let { Formatters.safeFileName(it) }
         val fromHeader = remote.contentDispositionName?.takeIf { it.isNotBlank() }?.let { Formatters.safeFileName(it) }
         val fromUrl = runCatching {
             val path = URI(url).path.orEmpty()
@@ -1070,6 +1296,21 @@ class ResumableDownloader(
             else -> guessExtFromUrl(url) ?: "bin"
         }
         return limitName("$name.$ext")
+    }
+
+    /**
+     * 去广告后缀：下载站常把文件名拼成「[www.xxx.com]App_v1.2.apk」、
+     * 「软件名_绿色版_下载之家.apk」，留着既难看又容易在不同站点重复下同一份文件。
+     */
+    private fun cleanFileName(name: String): String {
+        var cleaned = name
+        // [www.xxx.com] / 【xxx】/ (某某下载站) 这类包裹式广告
+        cleaned = cleaned.replace(Regex("""[[【(（][^]】)）]{2,40}(?:\.[a-z]{2,6})[^]】)）]*[]】)）]"""), "")
+        // _www.xxx.com / -下载之家 这类尾部广告
+        cleaned = cleaned.replace(Regex("""[_-](?:www\.)?[a-z0-9-]{2,30}\.(?:com|cn|net|org|cc|top|xyz)"""), "")
+        cleaned = cleaned.replace(Regex("""[-_ ](?:下载站|下载之家|绿色版|破解版|官方版|免费版)(?=\.[a-z0-9]{2,5}$)"""), "")
+        cleaned = cleaned.trim().trim('-', '_', ' ')
+        return cleaned.ifBlank { name }
     }
 
     private fun limitName(name: String): String {

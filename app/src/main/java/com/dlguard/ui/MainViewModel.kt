@@ -373,6 +373,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         container.downloadCenter.cancel()
     }
 
+    /** 暂停：分片与元数据都保留，继续时从断点接着下。 */
+    fun pauseDownload() {
+        container.downloadCenter.pause()
+    }
+
+    /** 继续被暂停的任务。 */
+    fun resumeDownload() {
+        container.downloadCenter.resume()
+    }
+
+    /** 下载中热切换并发：只改闸门，不重启任务。 */
+    fun setDownloadConnections(connections: Int) {
+        container.downloadCenter.setConnections(connections)
+    }
+
     fun dismissDownload() {
         container.downloadCenter.dismiss()
     }
@@ -432,7 +447,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // 当前设置值一定会被探测：用户手动设了 48，测速就必须给出 48 的真实成绩，
         // 而不是在 2 连接处判停后凭猜测把它降下去。
         val currentThreads = settings.value.downloadThreads.coerceIn(1, max)
-        val totalSteps = ConcurrencyTuner.ladderFor(start, max, currentThreads).size
+        val totalSteps = ConcurrencyTuner.fastSteps(max)
         _tuneState.value = TuneState.Probing(concurrency = start, speed = -1, step = 1, totalSteps = totalSteps)
         tuneJob = viewModelScope.launch(Dispatchers.IO) {
             try {

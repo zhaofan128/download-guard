@@ -32,10 +32,11 @@ import java.util.concurrent.atomic.AtomicLong
  *  - 采样窗口 1.2 秒，够跑出稳态，又不会让用户觉得慢；
  *  - 每档最多读 48MB（实际受 1.2 秒限制，通常 3~8MB）。
  *
- * 推荐口径：
- *  - 取「达到峰值 95% 的最小并发」为工程最优，但不低于 [MIN_RECOMMENDED]（8）——
- *    单连接跑满带宽时选 1 虽然省资源，却抗不住抖动；
- *  - **若用户当前设置已达峰值 95%，保留用户的值**，绝不把 48 无故降成 2。
+ * v4 的变化（用户反馈「测速太慢，直接给最快值」）：
+ *  - 不再跑 7 档全阶梯（要 8~15 秒），改成 **16 → 48 两档**，2~3 秒出结论；
+ *  - 推荐口径从「达到峰值 95% 的最小并发」改为**峰值所在档位**——
+ *    用户要的是最快，不是最省资源；
+ *  - 当前设置实测已达峰值 95% 时仍然保留，不会把 48 无故降下去。
  */
 class ConcurrencyTuner(
     baseClient: OkHttpClient,
@@ -81,11 +82,17 @@ class ConcurrencyTuner(
             return withCurrent.distinct().sorted()
         }
 
-        /** 单档稳态采样时长。 */
-        private const val LEVEL_TIME_MS = 1_200L
+        /** 单档稳态采样时长。900ms 足够跑出稳态，又不至于让用户干等。 */
+        private const val LEVEL_TIME_MS = 900L
 
         /** 整档硬超时（含 TCP/TLS 握手与排队）。 */
-        private const val LEVEL_TIMEOUT_MS = 3_000L
+        private const val LEVEL_TIMEOUT_MS = 2_200L
+
+        /** 快速模式的两档：足够判断「多连接是否有收益」。 */
+        val FAST_LADDER = listOf(16, 48)
+
+        /** 快速模式的档数（UI 进度条用）。 */
+        fun fastSteps(max: Int): Int = FAST_LADDER.count { it <= max.coerceIn(2, 48) }.coerceAtLeast(1)
 
         /** 所有档位共用的探测窗口：48MB，保证字节级可比。 */
         private const val WINDOW_BYTES = 48L * 1024 * 1024
@@ -144,11 +151,11 @@ class ConcurrencyTuner(
             )
         }
 
-        val ladder = ladderFor(startConcurrency, maxConcurrency, currentSetting)
+        val top = maxConcurrency.coerceIn(2, 48)
+        val mid = FAST_LADDER.first().coerceAtMost(top).coerceAtLeast(1)
+        val ladder = if (mid >= top) listOf(top) else listOf(mid, top)
         val probes = ArrayList<Probe>(ladder.size)
 
-        // v3 不做提前判停：用户明确要看 48 连接到底能跑多少，
-        // 提前停在 2 连接正是上一版「推荐 2 但 48 更快」的观感来源。
         for ((index, concurrency) in ladder.withIndex()) {
             val speed = probeLevel(url, total, concurrency)
             val probe = Probe(concurrency, speed)
@@ -175,10 +182,9 @@ class ConcurrencyTuner(
         val peak = peakProbe.bytesPerSecond
         val target = (peak * SATURATION_RATIO).toLong()
 
-        // 工程最优：达到峰值 95% 的最小并发，但不低于 8
-        val minimalGood = valid.firstOrNull { it.bytesPerSecond >= target }?.concurrency
-            ?: peakProbe.concurrency
-        val recommended = minimalGood.coerceAtLeast(MIN_RECOMMENDED)
+        // 用户要的是「最快」：直接给峰值所在档位，不再做「最小够用」的折中。
+        // 高并发档即使只快 5%，抗抖动能力也更好，没必要刻意降下去。
+        val recommended = peakProbe.concurrency
 
         // 用户当前值实测达标 → 保留，不覆盖
         val currentProbe = probes.firstOrNull { it.concurrency == currentSetting && it.bytesPerSecond > 0 }
