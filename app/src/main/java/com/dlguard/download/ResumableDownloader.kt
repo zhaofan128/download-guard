@@ -1398,17 +1398,12 @@ class ResumableDownloader(
     /**
      * 去广告后缀：下载站常把文件名拼成「[www.xxx.com]App_v1.2.apk」、
      * 「软件名_绿色版_下载之家.apk」，留着既难看又容易在不同站点重复下同一份文件。
+     *
+     * 规则本体在 [FileNameSanitizer]，这里再套一层 runCatching：命名的清洗再出问题，
+     * 也只退回原始文件名，绝不能让一条正则把整个下载任务打成失败。
      */
-    private fun cleanFileName(name: String): String {
-        var cleaned = name
-        // [www.xxx.com] / 【xxx】/ (某某下载站) 这类包裹式广告
-        cleaned = cleaned.replace(Regex("""[[【(（][^]】)）]{2,40}(?:\.[a-z]{2,6})[^]】)）]*[]】)）]"""), "")
-        // _www.xxx.com / -下载之家 这类尾部广告
-        cleaned = cleaned.replace(Regex("""[_-](?:www\.)?[a-z0-9-]{2,30}\.(?:com|cn|net|org|cc|top|xyz)"""), "")
-        cleaned = cleaned.replace(Regex("""[-_ ](?:下载站|下载之家|绿色版|破解版|官方版|免费版)(?=\.[a-z0-9]{2,5}$)"""), "")
-        cleaned = cleaned.trim().trim('-', '_', ' ')
-        return cleaned.ifBlank { name }
-    }
+    private fun cleanFileName(name: String): String =
+        runCatching { FileNameSanitizer.clean(name) }.getOrDefault(name)
 
     private fun limitName(name: String): String {
         if (name.length <= MAX_NAME_LENGTH) return name
