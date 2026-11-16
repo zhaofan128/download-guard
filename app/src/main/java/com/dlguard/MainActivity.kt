@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.List
@@ -50,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dlguard.core.CrashGuard
 import com.dlguard.core.PermissionHelper
 import com.dlguard.shizuku.ShizukuHelper
+import com.dlguard.ui.BtViewModel
 import com.dlguard.ui.MainViewModel
 import com.dlguard.ui.PluginViewModel
 import com.dlguard.ui.SettingViewModel
@@ -58,6 +60,7 @@ import com.dlguard.ui.components.BottomTab
 import com.dlguard.ui.components.GlassBackground
 import com.dlguard.ui.components.GlassBottomBar
 import com.dlguard.ui.components.PermissionGuideDialog
+import com.dlguard.ui.screens.BtScreen
 import com.dlguard.ui.screens.HomeScreen
 import com.dlguard.ui.screens.PluginScreen
 import com.dlguard.ui.screens.RecordsScreen
@@ -75,6 +78,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private val settingViewModel: SettingViewModel by viewModels()
     private val pluginViewModel: PluginViewModel by viewModels()
+    private val btViewModel: BtViewModel by viewModels()
     private var pendingUrl by mutableStateOf<String?>(null)
     private var pendingSharedText by mutableStateOf<String?>(null)
     private var pendingRecordId by mutableStateOf(-1L)
@@ -117,6 +121,7 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     settingViewModel = settingViewModel,
                     pluginViewModel = pluginViewModel,
+                    btViewModel = btViewModel,
                     dark = dark
                 )
             }
@@ -190,6 +195,7 @@ private fun AppShell(
     viewModel: MainViewModel,
     settingViewModel: SettingViewModel,
     pluginViewModel: PluginViewModel,
+    btViewModel: BtViewModel,
     dark: Boolean
 ) {
     val context = LocalContext.current
@@ -203,6 +209,11 @@ private fun AppShell(
     }
     LaunchedEffect(Unit) {
         settingViewModel.messages.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+    LaunchedEffect(Unit) {
+        btViewModel.messages.collect { message ->
             snackbarHostState.showSnackbar(message)
         }
     }
@@ -231,6 +242,7 @@ private fun AppShell(
         listOf(
             BottomTab("首页", Icons.Filled.Home),
             BottomTab("记录", Icons.Filled.List),
+            BottomTab("BT", Icons.Filled.ArrowDropDown),
             BottomTab("插件", Icons.Filled.Build),
             BottomTab("设置", Icons.Filled.Settings)
         )
@@ -260,11 +272,12 @@ private fun AppShell(
                         viewModel = viewModel,
                         settingViewModel = settingViewModel,
                         onOpenRecords = { tab = 1 },
-                        onOpenSettings = { tab = 3 },
+                        onOpenSettings = { tab = 4 },
                         bottomInset = 86.dp
                     )
                     1 -> RecordsScreen(viewModel = viewModel, bottomInset = 86.dp)
-                    2 -> PluginScreen(
+                    2 -> BtScreen(viewModel = btViewModel, bottomInset = 86.dp)
+                    3 -> PluginScreen(
                         viewModel = pluginViewModel,
                         onMessage = viewModel::notifyMessage,
                         bottomInset = 86.dp

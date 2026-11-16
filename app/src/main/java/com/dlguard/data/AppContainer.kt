@@ -44,6 +44,9 @@ class AppContainer(private val context: Context) {
         ResumableDownloader(context, checker, relayAwareClient)
     }
 
+    /** BT/磁力引擎：独立线程池 + SessionManager，任务状态通过 flow 暴露。 */
+    val btEngine: com.dlguard.bt.BtEngine by lazy { com.dlguard.bt.BtEngine(context) }
+
     /** HLS（m3u8）点播下载：与普通下载共用目录、只读 Wi-Fi 判定与收尾校验。 */
     val hlsDownloader: com.dlguard.download.hls.HlsDownloader by lazy {
         com.dlguard.download.hls.HlsDownloader(

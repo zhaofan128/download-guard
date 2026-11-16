@@ -20,8 +20,8 @@ android {
         applicationId = "com.dlguard"
         minSdk = 26
         targetSdk = 34
-        versionCode = 26
-        versionName = "2.1.1"
+        versionCode = 27
+        versionName = "2.2.0"
 
         vectorDrawables { useSupportLibrary = true }
         resourceConfigurations += listOf("zh", "en")
@@ -139,6 +139,16 @@ dependencies {
     // Shizuku：免 root 的 shell/bindwrapper 特权通道（API 13.1.5，Maven Central）
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
+
+    // BT/磁力：libtorrent4j（MIT），Java API 在主包，native .so 分架构打包。
+    // 每个架构的 .so 约 16.6MB，全架构覆盖意味着 APK 体积显著增大，
+    // 但换来的是任何 Android 8+ 设备装上就能用，不做 ABI 阉割。
+    val lt4j = "2.1.0-38"
+    implementation("org.libtorrent4j:libtorrent4j:$lt4j")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm:$lt4j")
+    implementation("org.libtorrent4j:libtorrent4j-android-arm64:$lt4j")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86:$lt4j")
+    implementation("org.libtorrent4j:libtorrent4j-android-x86_64:$lt4j")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

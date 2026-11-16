@@ -6,15 +6,15 @@
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84.svg)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 
-一个不需要 root 的 Android 下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。
+一个不需要 root 的 Android 下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起还内置了完整的 **BT / 磁力下载**（独立「BT」标签页）。
 
-> 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过。这三件事，它一起解决。
+> 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
 - Kotlin + Coroutines + Jetpack Compose（Material 3）
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
-- **114 个 JVM 单元测试、17 个测试类，本地与 CI 均零跳过**：CI 先构建 Debug 包，APK 验签用例才有真实样本可用（没有样本时它只会被跳过，绿色并不代表验签真的跑过）
-- 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、真实 APK 的 v2 签名摘要重算
+- **129 个 JVM 单元测试、19 个测试类，本地与 CI 均零跳过**：CI 先构建 Debug 包，APK 验签用例才有真实样本可用（没有样本时它只会被跳过，绿色并不代表验签真的跑过）
+- 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、磁力链接解析、BT 状态映射与限速展示、真实 APK 的 v2 签名摘要重算
 
 ## 它做不到什么（先看这里，比看功能列表省时间）
 
@@ -64,7 +64,25 @@
 | **首包不等黑洞** | 解析出双栈地址后并发做 TCP 探测，按实测 RTT 排序再连；IPv6 有地址没路由时不再白等 15 秒 `connectTimeout` |
 | **误判有出口** | 加壳包、企业定制包被结构校验拦下时，可在隔离区「信任并恢复」，指纹（SHA-256+大小）记入白名单，不再重复误报 |
 | **绝不删你的文件** | 判定损坏只做「移动到隔离区」，原文件名、时间戳、目录结构全部保留，随时可以拿回来 |
+| **BT / 磁力也能下**（2.2.0） | 内置 libtorrent4j 引擎：DHT/PEX/LSD 自动找节点，磁力拉元数据、种子文件直接下，可选文件、可限速、断点续传，下完持续做种 |
 | **开源可自建** | MIT 协议，签名密钥不入库，任何人 clone 下来都能编译出可用的包 |
+
+---
+
+## BT / 磁力下载（2.2.0 起）
+
+底部导航的「BT」页是一个独立的 BT 客户端，基于 [libtorrent4j](https://github.com/aldenml/libtorrent4j)（MIT）。它和 HTTP 下载分开——BT 有做种、节点、分享率这些独有概念，塞进同一张卡片反而混乱。
+
+- **添加任务**：粘贴 `magnet:?xt=urn:btih:…`（支持 40 位 hex 与 32 位 base32，明确拒绝 v2 的 `btmh`），或点文件夹图标选本地 `.torrent`。
+- **元数据**：磁力链接刚加上时走 DHT/PEX/LSD 找元数据，状态显示「获取元数据」，拿到后自动开始下载。
+- **文件选择**：多文件种子可以在「文件」里勾选要下的文件，勾掉的标记 `IGNORE` 不占空间。
+- **速度控制**：全局下载/上传限速（KB/s，留空不限），任务支持暂停/继续、重新校验、移除（保留文件）或连文件一起删。
+- **断点续传**：任务清单（来源 + 暂停状态）存本地，重启 App 自动重建；进度由 libtorrent 对磁盘文件做 hash check 得出，不依赖可能失真的进度快照。会话状态（DHT 节点等）单独持久化，加快冷启动。
+- **做种策略**：下载完成后持续做种，直到你手动暂停或删除——这是 BT 生态的默认礼仪。
+
+> **体积代价**：libtorrent 的 native 库每个 ABI 约 16.6 MB，四个架构（arm64-v8a / armeabi-v7a / x86 / x86_64）全打进去后 APK 约 73 MB（此前约 8 MB）。这是为了任何 Android 8+ 设备装上就能用，不做 ABI 阉割。如果你的设备只有 arm64，未来可提供单架构精简版。
+
+> **合规**：BT 是中立传输协议，本功能不提供任何资源搜索、索引或推荐。请只下载你有权获取的内容。
 
 ---
 
@@ -191,7 +209,7 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 全部单元测试（114 个用例 / 17 个测试类）
+./gradlew :app:testDebugUnitTest      # 全部单元测试（129 个用例 / 19 个测试类）
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -225,7 +243,7 @@ DownloadGuard/
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    114 个 JVM 单元测试（17 个测试类）
+├── app/src/test/    129 个 JVM 单元测试（19 个测试类）
 ├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包，测试数为 0 直接失败
 ├── xposed/          LSPosed 模块（可选，条件编译）
 └── dist/            本地构建产物（不随仓库提交）
