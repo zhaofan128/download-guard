@@ -69,7 +69,7 @@ object LinkSniffer {
     /** 可下载文件的常见后缀（不含 html/php 这类页面后缀）。 */
     private val FILE_EXTENSIONS = listOf(
         "apk", "apks", "xapk", "zip", "7z", "rar", "tar", "gz", "tgz",
-        "mp4", "mkv", "avi", "mov", "pdf", "exe", "msi", "dmg", "iso", "bin"
+        "mp4", "mkv", "avi", "mov", "m3u8", "pdf", "exe", "msi", "dmg", "iso", "bin"
     )
 
     private const val UA =
@@ -98,9 +98,9 @@ object LinkSniffer {
     /**
      * 流媒体判定。
      *
-     * m3u8 / mpd 是**播放列表**，直接下下来只是个几 KB 的文本；ts / m4s 是**分片**，
-     * 单下其中一个只有几秒内容。这类链接交给 ffmpeg / N_m3u8DL 之类的专用工具，
-     * 内置下载器不做 HLS 解密（那是另一个量级的工程，而且绕过 DRM 有法律风险）。
+     * m3u8 是**播放列表**，本身只有几 KB；ts / m4s 是**分片**，单下其中一个只有几秒内容。
+     * 从 2.1.0 起 m3u8 交给内置的 HLS 下载器（点播 + 标准 AES-128），
+     * mpd / 裸分片仍然只能交给 ffmpeg / N_m3u8DL 之类的专用工具。
      */
     fun streamKind(url: String): StreamKind? {
         val path = url.substringBefore('?').substringBefore('#').lowercase(Locale.ROOT)

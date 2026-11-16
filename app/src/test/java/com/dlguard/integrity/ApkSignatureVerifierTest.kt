@@ -6,20 +6,35 @@ import org.junit.Test
 import java.io.File
 
 /**
- * 用仓库里真实签名的 debug APK 校验 v2 解析与摘要重算。
- * 该 APK 由 AGP 用 debug key 签名（v2/v3），能跑通说明解析器没有把正常包误判。
- * 在其他机器上若没有 dist 产物则自动跳过，不阻塞构建。
+ * 用真实签名的 APK 校验 v2 解析与摘要重算。
+ *
+ * 取样顺序：`dist/` 里的历史产物 → `app/build/outputs/apk/debug/app-debug.apk`。
+ * 后者在 CI 里由 `assembleDebug` 现场生成，所以这三条用例在流水线上是真的会跑的，
+ * 不是「没有样本就悄悄跳过、显示一片绿」。
  */
 class ApkSignatureVerifierTest {
 
+    /** 所有可用的、带签名的 APK（排除 unsigned 半成品：它没有 APK Signing Block）。 */
+    private fun signedApks(): List<File> {
+        val fromDist = listOf(File("../dist"), File("dist"))
+            .filter { it.isDirectory }
+            .flatMap { dir ->
+                dir.listFiles { f ->
+                    f.isFile && f.extension.equals("apk", true) &&
+                        !f.name.contains("unsigned", ignoreCase = true)
+                }?.toList() ?: emptyList()
+            }
+        val built = listOf(
+            File("../app/build/outputs/apk/debug/app-debug.apk"),
+            File("app/build/outputs/apk/debug/app-debug.apk")
+        ).filter { it.isFile }
+        // 小于 4KB 的不是完整安装包，改字节做篡改用例也没有意义
+        return (fromDist + built).filter { it.length() > 4096 }.distinctBy { it.absolutePath }
+    }
+
     @Test
     fun `all shipped apks pass v2 digest verification`() {
-        val distDir = listOf(File("../dist"), File("dist")).firstOrNull { it.isDirectory }
-        // unsigned 产物是留给用户自签的半成品（无 APK Signing Block），不在验签范围
-        val apks = distDir?.listFiles { f ->
-            f.isFile && f.extension.equals("apk", true) &&
-                !f.name.contains("unsigned", ignoreCase = true)
-        }?.toList() ?: emptyList()
+        val apks = signedApks()
         assumeTrue("没有可用的已签名 APK，跳过", apks.isNotEmpty())
         apks.forEach { apk ->
             val scan = ZipInspector.scanEocd(apk)
@@ -31,12 +46,8 @@ class ApkSignatureVerifierTest {
 
     @Test
     fun `real debug apk passes v2 digest verification`() {
-        val candidates = listOf(
-            File("../dist/DownloadGuard-1.1.0-debug.apk"),
-            File("dist/DownloadGuard-1.1.0-debug.apk"),
-            File("../app/build/outputs/apk/debug/app-debug.apk")
-        )
-        val apk = candidates.firstOrNull { it.isFile }
+        val apk = signedApks().firstOrNull { it.name.contains("debug", ignoreCase = true) }
+            ?: signedApks().firstOrNull()
         assumeTrue("没有可用的已签名 APK，跳过", apk != null)
         val scan = ZipInspector.scanEocd(apk!!)
         assumeTrue("APK 缺少 EOCD", scan is EocdScan.Found)
@@ -46,10 +57,7 @@ class ApkSignatureVerifierTest {
 
     @Test
     fun `modifying one payload byte breaks v2 digest`() {
-        val source = listOf(
-            File("../dist/DownloadGuard-1.1.0-debug.apk"),
-            File("dist/DownloadGuard-1.1.0-debug.apk")
-        ).firstOrNull { it.isFile }
+        val source = signedApks().firstOrNull()
         assumeTrue("没有可用的已签名 APK，跳过", source != null)
 
         val copy = File.createTempFile("tampered_", ".apk")

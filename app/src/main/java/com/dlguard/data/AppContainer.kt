@@ -44,6 +44,16 @@ class AppContainer(private val context: Context) {
         ResumableDownloader(context, checker, relayAwareClient)
     }
 
+    /** HLS（m3u8）点播下载：与普通下载共用目录、只读 Wi-Fi 判定与收尾校验。 */
+    val hlsDownloader: com.dlguard.download.hls.HlsDownloader by lazy {
+        com.dlguard.download.hls.HlsDownloader(
+            client = relayAwareClient,
+            targetDir = { downloader.targetDirectory() },
+            verify = { file, size -> checker.check(file, size) },
+            onWifi = { downloader.isOnWifiNetwork() }
+        )
+    }
+
     /** 应用级下载中心：Activity 退出后下载继续。 */
     val downloadCenter: DownloadCenter by lazy {
         DownloadCenter(
@@ -53,7 +63,8 @@ class AppContainer(private val context: Context) {
             settingsStore = settings,
             policyProvider = { pluginManager.downloadPolicy() },
             // 插件脚本重写：沙箱执行，无网络/文件/反射权限
-            urlRewriter = { url -> pluginManager.rewriteUrl(url) }
+            urlRewriter = { url -> pluginManager.rewriteUrl(url) },
+            hls = hlsDownloader
         )
     }
 

@@ -1,5 +1,6 @@
 # 浏览器下载接管 · DownloadGuard
 
+[![CI](https://github.com/zhaofan128/download-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/zhaofan128/download-guard/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/zhaofan128/download-guard?label=release&color=2ea44f)](https://github.com/zhaofan128/download-guard/releases/latest)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84.svg)](https://developer.android.com)
@@ -12,7 +13,22 @@
 - Kotlin + Coroutines + Jetpack Compose（Material 3）
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
-- 69 个 JVM 单元测试，覆盖分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面与真实 APK 的 v2 签名摘要重算
+- **107 个 JVM 单元测试、16 个测试类，本地与 CI 均零跳过**：CI 先构建 Debug 包，APK 验签用例才有真实样本可用（没有样本时它只会被跳过，绿色并不代表验签真的跑过）
+- 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、真实 APK 的 v2 签名摘要重算
+
+## 它做不到什么（先看这里，比看功能列表省时间）
+
+| 场景 | 现状 | 原因 |
+| --- | --- | --- |
+| `blob:` 地址 | **不支持** | 媒体数据由页面 JS 在内存里生成，没有可请求的 URL；WebView 不暴露 blob 内容 |
+| HLS 点播（`.m3u8`） | **支持**（2.1.0 起） | 按分片顺序拼接，标准 AES-128 自动解密，可断点续传 |
+| HLS 直播 / DRM（SAMPLE-AES、Widevine、FairPlay） | **明确拒绝** | 直播没有终点；DRM 解密属于绕过版权保护，不做 |
+| DASH（`.mpd`） | **不支持** | 清单 + 分片 + 多轨合并的工程量与 HLS 不是一个量级，暂时只识别并提示 |
+| 验证码 / 强人机校验（含 Cloudflare 五秒盾） | **可能过不去** | WebView 里的挑战失败时只能回浏览器手动完成，App 不伪造浏览器指纹 |
+| Cloudflare 一次性令牌（`__cf_chl_tk`） | **几分钟后失效** | 令牌与 IP、UA、时间绑定，过期只能回原页面重新获取 |
+| 需要多步接口才能换出真实地址的站点 | **做不了** | 内置脚本插件只做 URL 字符串变换，不能发请求、不能读文件 |
+
+这张表会随着能力变化更新，不写「理论上支持」。
 
 ## 下载
 
@@ -91,6 +107,7 @@
 - **双栈竞速选路（1.9.0）**：双栈结果先并发探测 443（320ms 超时），按 RTT 排序返回，黑洞地址排到最后；纯 IPv4/纯 IPv6 不做探测（没有选择就没有收益）；结果缓存 60 秒，切网自动失效
 - **旁挂哈希自动校验（1.9.0）**：下载前探测 `xxx.apk.sha256` / `.sha256sum` / `.md5` / `.sha1`（含 `file.apk → file.sha256` 变体），只接受纯文本、拒绝 HTML 错误页、校验文件里写的是别的文件名就放弃；命中后自动作为官方基准，完成后直接给「一致 / 不符」
 - **收尾不再假死（1.9.0）**：100% 后进入「校验完整性 → 写入文件」两阶段，持有 `PARTIAL_WAKE_LOCK`（10 分钟超时兜底，异常也释放），UI 显示具体动作而不是干等；大包十几秒的哈希 + 签名校验不会再被系统冻结在半路
+- **HLS 点播下载（2.1.0）**：`.m3u8` 不再只是「识别后提示」——主列表按码率挑最高一路，媒体列表逐片顺序下载并拼接；标准 `AES-128` 用播放列表自带的密钥地址解密；每下完一片把「播放列表指纹 + 片号 + 字节数」写进 `.part.hls`，中断后从断点接着下。直播（无 `ENDLIST` 且非 VOD）与 DRM（`SAMPLE-AES`、非 identity `KEYFORMAT`）直接拒绝，不产出半截文件
 
 ### 三、网页链接嗅探
 
@@ -103,7 +120,7 @@
 
 嗅探时还会做两件事：
 
-- **识别流媒体**：`.m3u8` / `.mpd` / `.ts` / `.m4s` 会明确标出来并提示用专用工具。内置下载器不做 HLS 解密（工程量大，且绕 DRM 有法律风险），但至少不会让用户白等一个几 KB 的播放列表
+- **识别流媒体**：`.m3u8` 直接可下（点播 + 标准 AES-128，见上一节）；`.mpd` / `.ts` / `.m4s` 会明确标出来并说明为什么不能单独下。内置下载器不做 DRM 解密（工程量之外，绕 DRM 本身有法律风险），但至少不会让用户白等一个几 KB 的播放列表
 - **提取页面里的官方哈希**：从可见文本里找 `SHA256:` / `MD5:` 标签值与裸的 64/32 位十六进制串，作为候选列出来。**默认不选用** —— 页面内容本身不可信，自动采纳等于让攻击者同时控制文件和校验基准
 
 抓到链接后，连同当前页的 `Referer` 和 `CookieManager` 里的 Cookie 一起交给下载器——这是防盗链站点能正常下载的前提。`blob:` 开头的地址抓不到，这是 WebView 的边界，会明确提示而不是假装在下载。
@@ -147,13 +164,23 @@
 
 从 Releases 下载最新的 `DownloadGuard-x.y.z-release.apk`，直接安装。
 
-首次启动按引导授予：
-
-1. **所有文件访问权限** — 监控下载目录（Android 11+ 用 `MANAGE_EXTERNAL_STORAGE`，旁加载应用不受商店限制）
-2. **通知权限** — 校验结果与常驻通知
-3. **忽略电池优化**（建议）— 防止后台被系统冻结
-
 装完把浏览器里的下载链接复制过来，或在浏览器里长按链接分享给「浏览器下载接管」。
+
+### 权限：每个都要，但每个都能拒绝
+
+| 权限 | 用来做什么 | 拒绝之后的真实后果 |
+| --- | --- | --- |
+| **所有文件访问**（`MANAGE_EXTERNAL_STORAGE`，Android 11+） | ① 往公共「下载」目录写文件；② 监听浏览器 / 微信 / 网盘落到公共目录的下载 | **仍能下载**，文件改存 App 私有目录（`Android/data/com.dlguard/files/Download`，卸载即删，可用系统分享导出）；「文件落盘后自动校验」只对自己下的文件生效，管不到别的 App |
+| **通知**（`POST_NOTIFICATIONS`） | 进度、校验结论、失败原因 | 只能打开 App 看结果 |
+| **前台服务**（`dataSync` / `specialUse`） | 下载与目录监控在后台存活 | 切后台可能被系统回收，大文件建议留在前台 |
+| **忽略电池优化**（可选） | 防止厂商省电策略把长任务冻结 | 下载可能被暂停，回来点「继续」即可，断点不丢 |
+| **安装未知应用**（只在点开 APK 时申请） | 交给系统安装器 | 只能自己到文件管理器里点安装 |
+
+几个容易被误解的点，一次说清楚：
+
+- **为什么不用 SAF 代替「所有文件访问」**：SAF 只能访问用户手选的那一个目录，也收不到「别的 App 往这个目录写了文件」的通知。要监控浏览器、微信、网盘各自落到公共目录的下载，只有全盘读权限这一条路。
+- **Google Play**：`MANAGE_EXTERNAL_STORAGE` 属于需要单独申请的高危权限，上架时要提交用途说明并接受审核。本项目按旁加载（直接装 APK）分发，不依赖商店；如果要上架，得先改成「只用自己的目录 + 用户手选目录」的形态，那会丢掉跨应用监控。
+- **其余权限都是可选项**：无障碍、Shizuku、LSPosed 一个都不装，下载、校验、安装、嗅探全部照常工作。
 
 ---
 
@@ -164,7 +191,7 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 30 个单元测试
+./gradlew :app:testDebugUnitTest      # 全部单元测试（107 个用例 / 16 个测试类）
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -191,14 +218,15 @@ DownloadGuard/
 ├── app/src/main/java/com/dlguard/
 │   ├── core/        文件打开、链接嗅探、格式化、权限引导
 │   ├── data/        Room 记录、设置存储、链接捕获库
-│   ├── download/    ResumableDownloader、ChunkScheduler、ConcurrencyTuner、DownloadCenter
+│   ├── download/    ResumableDownloader、ChunkScheduler、ConcurrencyTuner、DownloadCenter、hls/
 │   ├── integrity/   五级校验（EOCD / CRC32 / APK 解析 / v2 签名）
 │   ├── plugin/      插件清单、配置 schema、市场源、局域网桥、扩展导出
 │   ├── service/     前台守护服务、通知
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    30 个 JVM 单元测试
+├── app/src/test/    107 个 JVM 单元测试（16 个测试类）
+├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包，测试数为 0 直接失败
 ├── xposed/          LSPosed 模块（可选，条件编译）
 └── dist/            本地构建产物（不随仓库提交）
 ```
@@ -207,8 +235,10 @@ DownloadGuard/
 
 ## 已知限制
 
-- **`blob:` 链接抓不到**：媒体数据由页面 JS 生成，没有可下载的 URL
-- **HLS / DASH 流媒体不支持**：只识别并提示，不做播放列表解析与分片合并
+- **`blob:` 链接抓不到**：媒体数据由页面 JS 在内存里生成，没有可下载的 URL
+- **HLS 只支持点播**：直播流与 DRM（`SAMPLE-AES`、Widevine、FairPlay）明确拒绝；音视频分离的流（`#EXT-X-MEDIA:TYPE=AUDIO`）目前只下主视频轨，成品可能没有声音
+- **DASH（`.mpd`）不支持**：清单解析、分片对齐与多轨合并是另一套工程量，当前只识别并提示
+- **非压缩文件只核对大小**：视频、PDF、图片没有 ZIP 结构，校验到「字节数对不对」为止；这不是偷懒，是这类格式没有内建校验和，硬凑一个反而会误报
 - **测速结果偏乐观**：只读窗口内的一小段，那部分常被 CDN 缓存命中；UI 已注明「仅供参考」并给出 100MB 的换算耗时
 - **哈希比对依赖用户提供基准**：App 无法判断「官网上写的那个 SHA-256 是不是真的官方」，只能保证「本地文件与你给的值是否一致」
 - **验证码 / 强人机校验**：WebView 可能过不去，需要回浏览器手动完成
@@ -230,6 +260,25 @@ DownloadGuard/
 - 插件系统是中立容器，插件行为由插件作者负责；内置的脚本沙箱不提供网络/文件/反射能力，也不提供绕过付费墙或风控的能力
 - 跨应用抓取默认关闭，开启后也只识别文件直链，不保存聊天、浏览历史或页面文本
 - 请只下载你有权获取的文件，并遵守当地法律与网站服务条款
+
+---
+
+## 版本策略
+
+**新能力才升次版本号，修 bug 只升修订号，攒够一批才发版。**
+
+| 变化类型 | 版本位 | 例子 |
+| --- | --- | --- |
+| 新增用户可感知的能力 / 不兼容变更 | `x.Y.0` | 1.9.0 全局熔断与双栈竞速、2.0.0 接力网关、2.1.0 HLS 点播 |
+| 修 bug、改文案、补文档、加 CI | `x.y.Z` | 2.1.1 修某个站点的下载失败 |
+| 纯文档 / CI / 构建脚本，不动 APK | **不发版** | README 纠错、workflow 调整 |
+
+发版前必须：CI 全绿 → `assembleRelease` 能出包 → Release 里写清楚「改了什么、影响了谁」。
+不为了刷版本号而发版；`2.0.0 → 2.0.1` 应该是「修了一个真实问题」，而不是「改了一段 README」。
+
+> 这次从 2.0.0 升到 **2.1.0**，是因为多了一件用户能感知的新能力（HLS 点播下载），按上表该升次版本号。
+> 至于 README 数字对不上、CI 缺失、清单里重复声明权限——这些都属于「不发版」的那一栏，跟着本次能力一起进包，不单独占版本号。
+> 下一次如果只有修复，就是 2.1.1；不搞 2.1.1→2.1.2→2.1.3 一连串补丁号。完整判定规则见 [VERSIONING.md](VERSIONING.md)。
 
 ---
 

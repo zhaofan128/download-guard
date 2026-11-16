@@ -91,7 +91,9 @@ class DownloadCenter(
      * 插件脚本的 URL 重写入口（沙箱执行）；返回 null 表示不改写。
      * 用函数注入而不是直接依赖 PluginManager，避免下载层反向依赖插件层。
      */
-    private val urlRewriter: (String) -> String? = { null }
+    private val urlRewriter: (String) -> String? = { null },
+    /** HLS（m3u8）点播下载器：与普通下载共用目录解析、并发闸门与收尾校验。 */
+    private val hls: com.dlguard.download.hls.HlsDownloader
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -299,49 +301,66 @@ class DownloadCenter(
                 }
             }
 
-            var outcome = downloader.download(
-                url = url,
-                preferredName = task.preferredName,
-                requireWifi = settings?.wifiOnlyDownload ?: false,
-                connections = initial,
-                referer = task.referer,
-                cookie = task.cookie,
-                governor = gate,
-                policy = policy,
-                onProgress = { progress ->
-                    // 任务已被暂停/删除时（job 取消，isActive 立即变 false）丢弃回调，
-                    // 防止收尾阶段的旧进度把 PAUSED/已删除状态又写回 RUNNING。
-                    if (rt.job?.isActive != true) return@download
-                    // 跨任务联动降级：别的任务把这个 host 打到 429 了，本任务也要跟着收
-                    if (breakerOn) enforceHostCap(host!!, gate, rt)
-                    val now = System.currentTimeMillis()
-                    val eta = progress.etaSeconds
-                    if (eta > 0) {
-                        if (eta != rt.frozenEta && now - rt.etaLastChangeAt >= ETA_FREEZE_MS) {
-                            rt.frozenEta = eta
-                            rt.etaLastChangeAt = now
-                        }
-                    } else {
-                        rt.frozenEta = -1
+            // HLS 点播走独立下载器：分片拼接与断点续传的语义完全不同，
+            // 但进度、熔断、收尾校验与普通任务共用同一条链路。
+            val isHls = com.dlguard.download.hls.HlsUrls.isPlaylist(url)
+
+            val progressSink: (DownloadProgress) -> Unit = sink@{ progress ->
+                // 任务已被暂停/删除时（job 取消，isActive 立即变 false）丢弃回调，
+                // 防止收尾阶段的旧进度把 PAUSED/已删除状态又写回 RUNNING。
+                if (rt.job?.isActive != true) return@sink
+                // 跨任务联动降级：别的任务把这个 host 打到 429 了，本任务也要跟着收
+                if (breakerOn) enforceHostCap(host!!, gate, rt)
+                val now = System.currentTimeMillis()
+                val eta = progress.etaSeconds
+                if (eta > 0) {
+                    if (eta != rt.frozenEta && now - rt.etaLastChangeAt >= ETA_FREEZE_MS) {
+                        rt.frozenEta = eta
                         rt.etaLastChangeAt = now
                     }
-                    adaptConcurrency(progress, gate, rt)
-                    updateTask(id) { t ->
-                        if (t.phase != TaskPhase.RUNNING) t else t.copy(
-                            progress = progress.fraction,
-                            downloaded = progress.downloadedBytes,
-                            total = progress.totalBytes,
-                            speed = progress.bytesPerSecond,
-                            attempt = progress.attempt,
-                            connections = progress.connections,
-                            etaSeconds = if (progress.stage == DownloadStage.DOWNLOADING) rt.frozenEta else -1,
-                            hotSwitchable = progress.segmented && progress.stage == DownloadStage.DOWNLOADING,
-                            stage = progress.stage,
-                            throttledByHost = t.throttledByHost || rt.capLimited
-                        )
-                    }
+                } else {
+                    rt.frozenEta = -1
+                    rt.etaLastChangeAt = now
                 }
-            )
+                adaptConcurrency(progress, gate, rt)
+                updateTask(id) { t ->
+                    if (t.phase != TaskPhase.RUNNING) t else t.copy(
+                        progress = progress.fraction,
+                        downloaded = progress.downloadedBytes,
+                        total = progress.totalBytes,
+                        speed = progress.bytesPerSecond,
+                        attempt = progress.attempt,
+                        connections = progress.connections,
+                        etaSeconds = if (progress.stage == DownloadStage.DOWNLOADING) rt.frozenEta else -1,
+                        hotSwitchable = progress.segmented && progress.stage == DownloadStage.DOWNLOADING,
+                        stage = progress.stage,
+                        throttledByHost = t.throttledByHost || rt.capLimited
+                    )
+                }
+            }
+
+            var outcome = if (isHls) {
+                hls.download(
+                    url = url,
+                    preferredName = task.preferredName,
+                    requireWifi = settings?.wifiOnlyDownload ?: false,
+                    referer = task.referer,
+                    cookie = task.cookie,
+                    onProgress = progressSink
+                )
+            } else {
+                downloader.download(
+                    url = url,
+                    preferredName = task.preferredName,
+                    requireWifi = settings?.wifiOnlyDownload ?: false,
+                    connections = initial,
+                    referer = task.referer,
+                    cookie = task.cookie,
+                    governor = gate,
+                    policy = policy,
+                    onProgress = progressSink
+                )
+            }
 
             // 遇阻自保：403/429 大概率是服务器在限流，此时并发越高越糟。
             // 整轮失败后自动把并发减半再来一次——分片都在，续传不重下。
@@ -375,32 +394,28 @@ class DownloadCenter(
                 )
                 // 429 是明确的「你太快了」，等久一点；403 更像权限问题，只轻退避
                 delay(if (code == 429) 5_000L * throttleRound else 2_000L * throttleRound)
-                outcome = downloader.download(
-                    url = url,
-                    preferredName = task.preferredName,
-                    requireWifi = settings?.wifiOnlyDownload ?: false,
-                    connections = next,
-                    referer = task.referer,
-                    cookie = task.cookie,
-                    governor = gate,
-                    policy = policy,
-                    onProgress = { progress ->
-                        if (rt.job?.isActive != true) return@download
-                        updateTask(id) { t ->
-                            if (t.phase != TaskPhase.RUNNING) t else t.copy(
-                                progress = progress.fraction,
-                                downloaded = progress.downloadedBytes,
-                                total = progress.totalBytes,
-                                speed = progress.bytesPerSecond,
-                                attempt = progress.attempt,
-                                connections = progress.connections,
-                                hotSwitchable = progress.segmented && progress.stage == DownloadStage.DOWNLOADING,
-                                stage = progress.stage,
-                                throttledByHost = t.throttledByHost || rt.capLimited
-                            )
-                        }
-                    }
-                )
+                outcome = if (isHls) {
+                    hls.download(
+                        url = url,
+                        preferredName = task.preferredName,
+                        requireWifi = settings?.wifiOnlyDownload ?: false,
+                        referer = task.referer,
+                        cookie = task.cookie,
+                        onProgress = progressSink
+                    )
+                } else {
+                    downloader.download(
+                        url = url,
+                        preferredName = task.preferredName,
+                        requireWifi = settings?.wifiOnlyDownload ?: false,
+                        connections = next,
+                        referer = task.referer,
+                        cookie = task.cookie,
+                        governor = gate,
+                        policy = policy,
+                        onProgress = progressSink
+                    )
+                }
             }
 
             if (outcome.success) {
@@ -454,7 +469,11 @@ class DownloadCenter(
                     source = ResolvedSource(
                         downloadUrl = task.url,
                         declaredSize = integrity.declaredSize,
-                        origin = "内置加固下载器（${outcome.connections} 连接）"
+                        origin = if (outcome.contentType?.contains("mpegurl", true) == true) {
+                            "内置 HLS 下载器（分片顺序拼接）"
+                        } else {
+                            "内置加固下载器（${outcome.connections} 连接）"
+                        }
                     ),
                     quarantinedPath = null
                 )

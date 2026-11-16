@@ -78,6 +78,14 @@ class ApkIntegrityChecker(private val context: Context) {
         }
 
         onStage?.invoke("检查 ZIP 中央目录")
+        // 视频 / 音频 / PDF / 图片本来就不是 ZIP，走 EOCD 只会白白判成「非 ZIP 结构」。
+        // 过去这里少了这道分流，一个完全正常的 mp4 会被标成「校验失败」，比不校验更糟。
+        if (!IntegrityPolicy.requiresArchiveValidation(file.name, ZipInspector.startsWithZipHeader(file))) {
+            return@withContext finish(
+                Verdict.OK,
+                "非压缩格式，已核对大小（$actualSize 字节）"
+            )
+        }
         // L2 EOCD
         val eocdScan = ZipInspector.scanEocd(file)
         when (eocdScan) {

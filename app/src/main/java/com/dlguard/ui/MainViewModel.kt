@@ -429,7 +429,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return ext in setOf(
             "apk", "apks", "xapk", "apkm", "zip", "7z", "rar", "tar", "gz", "tgz",
             "pdf", "epub", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-            "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "m4a",
+            "mp4", "mkv", "avi", "mov", "webm", "m3u8", "mp3", "flac", "wav", "m4a",
             "iso", "img", "bin", "exe", "msi", "dmg", "pkg", "torrent"
         )
     }

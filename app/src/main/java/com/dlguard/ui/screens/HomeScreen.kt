@@ -591,7 +591,8 @@ private fun PermissionBanner(legacyStorage: Boolean, onClick: () -> Unit) {
                     text = if (legacyStorage) {
                         "「存储空间」权限不够用，点此查看正确的授权路径"
                     } else {
-                        "无法监听 Download / 微信 / 网盘目录，点此前往授权"
+                        "无法监听 Download / 微信 / 网盘目录；自己粘贴链接的下载仍可用，" +
+                            "文件先存到应用私有目录，之后可分享导出"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)

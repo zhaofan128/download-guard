@@ -586,15 +586,26 @@ private fun SniffScreen(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-                        // 流媒体：下下来也是个播放列表，说清楚比默默不支持好
+                        // 流媒体：HLS 现在能真下（点播 + 标准 AES-128），其余仍然只能交给专用工具
                         val stream = LinkSniffer.streamKind(target)
                         if (stream != null) {
                             Spacer(Modifier.height(10.dp))
                             Text(
-                                text = "这是${stream.label}，不是完整文件。内置下载器不做流媒体解密，" +
-                                    "建议复制链接后用专用工具（如 N_m3u8DL、ffmpeg）下载。",
+                                text = when (stream) {
+                                    LinkSniffer.StreamKind.HLS_PLAYLIST ->
+                                        "这是 HLS 播放列表（m3u8）。可以直接下载：按分片顺序拼成一个 .ts 文件，" +
+                                            "标准 AES-128 加密会自动解密；直播流与 DRM（SAMPLE-AES）会明确拒绝。"
+                                    LinkSniffer.StreamKind.DASH_MANIFEST ->
+                                        "这是 DASH 清单（mpd），内置下载器还不支持，建议用 ffmpeg 之类的工具。"
+                                    LinkSniffer.StreamKind.SEGMENT ->
+                                        "这是流媒体分片，单独下只有几秒内容。要完整视频请选同目录下的 .m3u8 播放列表。"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
+                                color = if (stream == LinkSniffer.StreamKind.HLS_PLAYLIST) {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                }
                             )
                         }
                         // 页面里写着的官方校验值：只作为候选，默认不选。

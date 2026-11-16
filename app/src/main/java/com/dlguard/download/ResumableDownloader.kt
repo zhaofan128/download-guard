@@ -1359,6 +1359,12 @@ class ResumableDownloader(
         return context.filesDir
     }
 
+    /** HLS 下载器复用同一套目录解析：公共下载目录不可写时同样降级到应用私有目录。 */
+    fun targetDirectory(): File = resolveTargetDir()
+
+    /** HLS 下载器复用同一套「仅 Wi-Fi」判定，避免两套实现判出两种结果。 */
+    fun isOnWifiNetwork(): Boolean = isOnWifi()
+
     private fun resolveFileName(
         url: String,
         preferredName: String?,
