@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 单元测试 + Debug 编译
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      # 先出 Debug 包：验签用例需要真实签名的 APK 作为样本，
+      # 没有样本它们会 assumeTrue 跳过——跳过不算失败，但会掩盖问题。
+      - name: 编译 Debug 包
+        run: ./gradlew :app:assembleDebug --console=plain
+
+      - name: 执行 JVM 单元测试
+        run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace
+
+      # Gradle 里「一个用例都没跑到」也会是 BUILD SUCCESSFUL（比如测试源集被改坏），
+      # 所以这里直接读 JUnit XML，用例数为 0 或少得不正常就判失败。
+      - name: 校验测试确实执行了
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, sys
+          import xml.etree.ElementTree as ET
+
+          total = failed = skipped = 0
+          files = glob.glob("app/build/test-results/testDebugUnitTest/*.xml")
+          for path in files:
+              root = ET.parse(path).getroot()
+              total += int(root.get("tests", 0))
+              failed += int(root.get("failures", 0)) + int(root.get("errors", 0))
+              skipped += int(root.get("skipped", 0))
+          print(f"测试类 {len(files)} 个，用例 {total} 个，失败 {failed} 个，跳过 {skipped} 个")
+          if total < 90:
+              sys.exit(f"只跑到 {total} 个用例（预期 ≥90），判定为测试没有真正执行")
+          if failed:
+              sys.exit(f"{failed} 个用例失败")
+          PY
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: app/build/reports/tests/testDebugUnitTest
+          retention-days: 7
+          if-no-files-found: ignore
