@@ -38,6 +38,15 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicLong
 
+/** 下载阶段：UI 据此把「100% 卡住」翻译成人能看懂的状态。 */
+enum class DownloadStage {
+    DOWNLOADING,
+    /** 整文件哈希 + APK 签名校验（大包十几秒，最容易让人以为死机）。 */
+    VERIFYING,
+    /** 改名 / 跨卷复制落盘。 */
+    FINALIZING
+}
+
 data class DownloadProgress(
     val downloadedBytes: Long,
     val totalBytes: Long,
@@ -45,7 +54,8 @@ data class DownloadProgress(
     val attempt: Int,
     val connections: Int = 1,
     /** true = 走分块调度，可以在下载过程中热切换并发；false = 单连接流式，切了也没用。 */
-    val segmented: Boolean = false
+    val segmented: Boolean = false,
+    val stage: DownloadStage = DownloadStage.DOWNLOADING
 ) {
     val fraction: Float
         get() = if (totalBytes > 0) (downloadedBytes.toFloat() / totalBytes).coerceIn(0f, 1f) else 0f
@@ -101,6 +111,9 @@ class ResumableDownloader(
     private val client: OkHttpClient = defaultClient()
 ) {
 
+    /** 收尾阶段防止 CPU 休眠/进程冻结导致「卡在 100%」。 */
+    private val keepAwake = KeepAwake(context)
+
     companion object {
         private const val MAX_ATTEMPTS = 4
         private const val BUFFER = 256 * 1024
@@ -140,6 +153,8 @@ class ResumableDownloader(
                 "Chrome/124.0.0.0 Mobile Safari/537.36 DownloadGuard/1.2"
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
+            // 双栈竞速：解析后并发探测、按实测 RTT 排序，专治 IPv6 黑洞吃掉 15 秒 connectTimeout
+            .dns(RacingDns())
             .dispatcher(Dispatcher().apply {
                 maxRequests = 512
                 maxRequestsPerHost = 256
@@ -755,7 +770,8 @@ class ResumableDownloader(
             part = part, metaFile = metaFile, targetDir = targetDir, fileName = fileName,
             downloaded = downloaded, url = url,
             elapsedMs = SystemClock.elapsedRealtime() - startedAt,
-            connections = connections, contentType = remote.contentType, declaredSize = total
+            connections = connections, contentType = remote.contentType, declaredSize = total,
+            onProgress = onProgress, totalBytes = total
         )
     }
 
@@ -978,7 +994,8 @@ class ResumableDownloader(
         if (expectedTotal > 0 && existing == expectedTotal) {
             return finalize(
                 part, metaFile, targetDir, fileName, existing, url,
-                SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, expectedTotal
+                SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, expectedTotal,
+                onProgress = onProgress, totalBytes = expectedTotal
             )
         }
 
@@ -1001,7 +1018,8 @@ class ResumableDownloader(
                 if (existing > 0L && (expectedTotal <= 0 || existing >= expectedTotal)) {
                     return finalize(
                         part, metaFile, targetDir, fileName, existing, url,
-                        SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, expectedTotal
+                        SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, expectedTotal,
+                        onProgress = onProgress, totalBytes = expectedTotal
                     )
                 }
                 part.delete()
@@ -1082,7 +1100,8 @@ class ResumableDownloader(
                 }
                 return finalize(
                     part, metaFile, targetDir, fileName, done, url,
-                    SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, total
+                    SystemClock.elapsedRealtime() - startedAt, 1, remote.contentType, total,
+                    onProgress = onProgress, totalBytes = total
                 )
             }
         }
@@ -1175,12 +1194,30 @@ class ResumableDownloader(
         elapsedMs: Long,
         connections: Int,
         contentType: String?,
-        declaredSize: Long? = null
+        declaredSize: Long? = null,
+        /** 用于把「正在校验 / 正在落盘」实时告诉 UI；100% 卡住时用户才知道没死机。 */
+        onProgress: ((DownloadProgress) -> Unit)? = null,
+        totalBytes: Long = -1L
     ): DownloadOutcome {
         if (!part.exists() || part.length() <= 0L) {
             return DownloadOutcome(error = "分片文件不存在或为空", url = url)
         }
-        val result = checker.check(part, declaredSize ?: downloaded.takeIf { it > 0 })
+        val reportedTotal = if (totalBytes > 0) totalBytes else downloaded
+        onProgress?.invoke(
+            DownloadProgress(
+                downloadedBytes = downloaded,
+                totalBytes = reportedTotal,
+                bytesPerSecond = 0,
+                attempt = 1,
+                connections = connections,
+                segmented = true,
+                stage = DownloadStage.VERIFYING
+            )
+        )
+        // 校验是纯 CPU + IO 的重活，期间没有网络包，系统很容易判定「空闲」把进程冻结
+        val result = keepAwake.holdSuspend("verify") {
+            checker.check(part, declaredSize ?: downloaded.takeIf { it > 0 })
+        }
         if (!result.healthy) {
             part.delete()
             DownloadMeta.delete(metaFile)
@@ -1190,6 +1227,17 @@ class ResumableDownloader(
                 url = url
             )
         }
+        onProgress?.invoke(
+            DownloadProgress(
+                downloadedBytes = downloaded,
+                totalBytes = reportedTotal,
+                bytesPerSecond = 0,
+                attempt = 1,
+                connections = connections,
+                segmented = true,
+                stage = DownloadStage.FINALIZING
+            )
+        )
         // 同名文件：默认**替换**，不再生成「xxx(1).apk」。
         // 旧行为下用户重下一个文件，目录里会躺两份一模一样的安装包，谁也分不清哪份是新的，
         // 「最近校验」里还会出现两条同名记录。

@@ -43,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -164,6 +165,14 @@ fun SettingScreen(
                     onCheckedChange = settingViewModel::setAccessibilityCapture
                 )
                 SettingSwitch(
+                    title = "跨应用抓取（微信/QQ 内嵌页）",
+                    subtitle = "把抓取范围扩到社交/网盘 App 的内嵌 WebView：只识别 .apk/.zip/.pdf/.mp4 等文件直链，" +
+                        "不读取、不记录聊天与浏览内容；默认关闭",
+                    checked = settings.crossAppCapture,
+                    hapticEnabled = settings.haptics,
+                    onCheckedChange = settingViewModel::setCrossAppCapture
+                )
+                SettingSwitch(
                     title = "无障碍心跳保活",
                     subtitle = "每 20 秒检测无障碍状态，被系统杀掉后自动写回开启（需 Shizuku）",
                     checked = settings.autoRepairAccessibility,
@@ -205,6 +214,10 @@ fun SettingScreen(
                 ParallelTaskSelector(
                     current = settings.maxParallelTasks,
                     onSelect = settingViewModel::setMaxParallelTasks
+                )
+                TitleFontSelector(
+                    current = settings.titleFont,
+                    onSelect = settingViewModel::setTitleFont
                 )
                 SettingSwitch(
                     title = "触觉反馈",
@@ -442,7 +455,7 @@ fun SettingScreen(
         ) {
                 SettingAction(
                     title = "导出校验日志",
-                    subtitle = "生成 CSV 并调用系统分享（含结论、大小、来源、隔离路径）",
+                    subtitle = "生成 CSV 并调用系统分享；链接凭证与本地绝对路径已脱敏（文件带 _redacted 标记）",
                     icon = Icons.Filled.Share,
                     onClick = {
                         viewModel.exportLogs { file ->
@@ -705,6 +718,55 @@ private fun ParallelTaskSelector(current: Int, onSelect: (Int) -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
             )
+        }
+    }
+}
+
+/** 首页标题字体：sans 现代无衬线（默认）/ system 跟随系统 / serif / mono。 */
+@Composable
+private fun TitleFontSelector(current: String, onSelect: (String) -> Unit) {
+    val options = listOf(
+        "sans" to "现代无衬线",
+        "system" to "跟随系统",
+        "serif" to "衬线",
+        "mono" to "等宽"
+    )
+    Column(Modifier.padding(vertical = 10.dp)) {
+        Text(
+            text = "首页标题字体",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "只影响首页顶部「浏览器下载接管」标题，立即生效。若系统主题字体本身是手写体，选「现代无衬线」可覆盖",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (value, label) ->
+                val selected = value == current
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.05f)
+                        )
+                        .clickable { if (!selected) onSelect(value) }
+                        .padding(vertical = 10.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+            }
         }
     }
 }
@@ -1078,7 +1140,7 @@ private fun shareCsv(context: android.content.Context, file: File) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/csv"
             putExtra(Intent.EXTRA_STREAM, uri)
-            putExtra(Intent.EXTRA_SUBJECT, "浏览器下载接管校验日志")
+            putExtra(Intent.EXTRA_SUBJECT, "[已脱敏] 浏览器下载接管校验日志")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         context.startActivity(Intent.createChooser(intent, "导出校验日志"))

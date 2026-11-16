@@ -1,8 +1,13 @@
 package com.dlguard
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
 import com.dlguard.core.CrashGuard
 import com.dlguard.data.AppContainer
+import com.dlguard.download.HostCircuitBreaker
+import com.dlguard.download.RacingDns
 import com.dlguard.service.NotificationHelper
 import com.dlguard.service.ServiceController
 import com.dlguard.shizuku.ShizukuHelper
@@ -21,5 +26,23 @@ class DownloadGuardApp : Application() {
         ShizukuHelper.init(this)
         runCatching { NotificationHelper(this).createChannels() }
         runCatching { ServiceController.scheduleWatchdog(this) }
+        watchNetworkChange()
+    }
+
+    /**
+     * 网络切换（Wi-Fi ⇄ 5G）时作废旧的双栈解析结果与主机熔断记录：
+     * 新链路下的 IPv6 可达性、CDN 就近节点、限流状态都可能完全不同，
+     * 沿用旧结论会让我们继续走一条已经不通的路。
+     */
+    private fun watchNetworkChange() {
+        runCatching {
+            val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            manager.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    RacingDns.invalidate()
+                    HostCircuitBreaker.reset()
+                }
+            })
+        }
     }
 }

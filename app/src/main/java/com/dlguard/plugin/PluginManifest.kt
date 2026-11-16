@@ -54,6 +54,13 @@ data class PluginManifest(
     val permissions: List<String> = emptyList(),
     /** 配置项 schema：详情页据此生成表单。 */
     val config: List<PluginConfigField> = emptyList(),
+    /**
+     * URL 重写脚本（JavaScript，沙箱执行，200ms 超时，无网络/文件/反射权限）。
+     * 入参 `url`，返回新 URL 或 null。空串 = 纯配置型插件。
+     */
+    val script: String = "",
+    /** 脚本生效的 host 列表（后缀匹配，如 `pan.example.com`）；空 = 所有 host。 */
+    val matchHosts: List<String> = emptyList(),
     /** 内置官方插件：常驻列表、默认置顶、不可卸载。 */
     val pinned: Boolean = false,
     val enabledByDefault: Boolean = false

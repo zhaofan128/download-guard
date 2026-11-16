@@ -63,11 +63,13 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -153,6 +155,7 @@ fun HomeScreen(
         item {
             Header(
                 permissionsOk = permissions.storage && permissions.notifications,
+                titleFont = settings.titleFont,
                 onPillClick = {
                     if (permissions.storage) onOpenSettings() else viewModel.openPermissionGuide()
                 }
@@ -291,13 +294,24 @@ fun HomeScreen(
     }
 }
 
+/** 首页标题字体：默认现代无衬线，可在设置页切换；中文标题不吃负字距。 */
+private fun String.toTitleFontFamily(): FontFamily = when (this) {
+    "system" -> FontFamily.Default
+    "serif" -> FontFamily.Serif
+    "mono" -> FontFamily.Monospace
+    else -> FontFamily.SansSerif
+}
+
 @Composable
-private fun Header(permissionsOk: Boolean, onPillClick: () -> Unit) {
+private fun Header(permissionsOk: Boolean, titleFont: String, onPillClick: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(
                 text = "浏览器下载接管",
-                style = MaterialTheme.typography.displaySmall,
+                style = MaterialTheme.typography.displaySmall.copy(
+                    fontFamily = titleFont.toTitleFontFamily(),
+                    letterSpacing = 0.sp
+                ),
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(2.dp))
@@ -926,8 +940,11 @@ private fun TaskRow(
                 Text(
                     text = when (task.phase) {
                         TaskPhase.QUEUED -> "排队中"
-                        TaskPhase.RUNNING ->
-                            if (task.total > 0) "${(task.progress * 100).toInt()}%" else "下载中"
+                        TaskPhase.RUNNING -> when (task.stage) {
+                            com.dlguard.download.DownloadStage.VERIFYING -> "校验中"
+                            com.dlguard.download.DownloadStage.FINALIZING -> "落盘中"
+                            else -> if (task.total > 0) "${(task.progress * 100).toInt()}%" else "下载中"
+                        }
                         TaskPhase.PAUSED -> "已暂停"
                         TaskPhase.FAILED -> "失败"
                         TaskPhase.DONE -> "完成"
@@ -948,7 +965,8 @@ private fun TaskRow(
                 Spacer(Modifier.height(8.dp))
                 JellyProgressBarComponent(
                     progress = task.progress,
-                    active = task.phase == TaskPhase.RUNNING && task.speed > 0
+                    active = task.phase == TaskPhase.RUNNING && task.speed > 0 &&
+                        task.stage == com.dlguard.download.DownloadStage.DOWNLOADING
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(
@@ -964,13 +982,20 @@ private fun TaskRow(
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                     )
                     Text(
-                        text = if (task.speed > 0) Formatters.speed(task.speed)
-                        else if (task.phase == TaskPhase.RUNNING) "计算中..." else "已停",
+                        text = when {
+                            task.stage != com.dlguard.download.DownloadStage.DOWNLOADING ->
+                                if (task.stage == com.dlguard.download.DownloadStage.VERIFYING) "校验完整性"
+                                else "写入文件"
+                            task.speed > 0 -> Formatters.speed(task.speed)
+                            task.phase == TaskPhase.RUNNING -> "计算中..."
+                            else -> "已停"
+                        },
                         style = MonoSmallStyle,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
                     )
                     Text(
                         text = when {
+                            task.stage != com.dlguard.download.DownloadStage.DOWNLOADING -> "—"
                             task.connections > 1 -> "${task.connections} 连接"
                             task.connections == 1 -> "单连接"
                             else -> "准备中"
@@ -980,6 +1005,8 @@ private fun TaskRow(
                     )
                     Text(
                         text = when {
+                            task.stage == com.dlguard.download.DownloadStage.VERIFYING -> "正在核验哈希与签名"
+                            task.stage == com.dlguard.download.DownloadStage.FINALIZING -> "正在落盘"
                             task.phase == TaskPhase.PAUSED -> "断点已存"
                             task.total <= 0 -> "流式写入"
                             task.etaSeconds > 0 -> "剩 ${Formatters.durationSeconds(task.etaSeconds)}"
@@ -995,6 +1022,14 @@ private fun TaskRow(
                     HotSwitchSlider(
                         current = task.connections,
                         onChange = { onTaskConnections(task.id, it) }
+                    )
+                }
+                if (task.throttledByHost && task.phase == TaskPhase.RUNNING) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "该站点触发全局限流 · 同域名任务已一起降并发，避免整个 IP 被拉黑",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
             }

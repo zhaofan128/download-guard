@@ -29,6 +29,8 @@
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+    <!-- 收尾阶段（整文件哈希 + 签名校验 + 落盘）持有局部唤醒锁，避免 100% 后卡死 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- 安装 APK 必需：Android 8+ 缺了它，系统安装器收到 ACTION_VIEW 会静默结束（点了「打开」毫无反应） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Shizuku 特权通道（管理器持有该权限，Provider 校验用） -->

@@ -20,8 +20,8 @@ android {
         applicationId = "com.dlguard"
         minSdk = 26
         targetSdk = 34
-        versionCode = 22
-        versionName = "1.8.0"
+        versionCode = 23
+        versionName = "1.9.0"
 
         vectorDrawables { useSupportLibrary = true }
         resourceConfigurations += listOf("zh", "en")
@@ -130,6 +130,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // 插件脚本沙箱：纯 Java 的解释器（无 JIT、无字节码生成，Android 上可安全跑）
+    implementation("org.mozilla:rhino:1.7.13")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // Shizuku：免 root 的 shell/bindwrapper 特权通道（API 13.1.5，Maven Central）

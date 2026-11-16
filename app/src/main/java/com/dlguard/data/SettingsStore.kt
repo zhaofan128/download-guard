@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +37,13 @@ data class GuardSettings(
     /** 无障碍被系统杀掉后，心跳检测到就自动写回开启（需要 Shizuku）。 */
     val autoRepairAccessibility: Boolean = false,
     /**
+     * 跨应用链接嗅探：把无障碍抓取范围从浏览器扩展到微信/QQ 等内嵌 WebView 容器。
+     * 默认关闭——这是隐私敏感能力，只抓「明确的文件直链」，不记录聊天与浏览内容。
+     */
+    val crossAppCapture: Boolean = false,
+    /** 首页标题字体：sans（现代无衬线）/ system（跟随系统）/ serif / mono。 */
+    val titleFont: String = "sans",
+    /**
      * 允许点击校验完成的 APK 时直接调起安装。
      * 走 Shizuku 的 pm install，**不申请 REQUEST_INSTALL_PACKAGES**，
      * 这样安装包本身不会被 OPPO/华为等 ROM 的「安装前安全检测」拦成「已损坏」。
@@ -60,6 +68,8 @@ class SettingsStore(private val context: Context) {
         val ACCESSIBILITY_CAPTURE = booleanPreferencesKey("accessibility_capture")
         val AUTO_REPAIR_ACCESSIBILITY = booleanPreferencesKey("auto_repair_accessibility")
         val ALLOW_INSTALLER = booleanPreferencesKey("allow_installer")
+        val CROSS_APP_CAPTURE = booleanPreferencesKey("cross_app_capture")
+        val TITLE_FONT = stringPreferencesKey("title_font")
     }
 
     val settings: Flow<GuardSettings> = context.guardDataStore.data
@@ -79,6 +89,8 @@ class SettingsStore(private val context: Context) {
                 captureNotificationLinks = prefs[Keys.CAPTURE_NOTIFICATION_LINKS] ?: false,
                 accessibilityCapture = prefs[Keys.ACCESSIBILITY_CAPTURE] ?: false,
                 autoRepairAccessibility = prefs[Keys.AUTO_REPAIR_ACCESSIBILITY] ?: false,
+                crossAppCapture = prefs[Keys.CROSS_APP_CAPTURE] ?: false,
+                titleFont = prefs[Keys.TITLE_FONT] ?: "sans",
                 allowInstaller = prefs[Keys.ALLOW_INSTALLER] ?: true
             )
         }
@@ -94,6 +106,12 @@ class SettingsStore(private val context: Context) {
     suspend fun setCaptureNotificationLinks(value: Boolean) = put(Keys.CAPTURE_NOTIFICATION_LINKS, value)
     suspend fun setAccessibilityCapture(value: Boolean) = put(Keys.ACCESSIBILITY_CAPTURE, value)
     suspend fun setAutoRepairAccessibility(value: Boolean) = put(Keys.AUTO_REPAIR_ACCESSIBILITY, value)
+    suspend fun setCrossAppCapture(value: Boolean) = put(Keys.CROSS_APP_CAPTURE, value)
+
+    suspend fun setTitleFont(value: String) {
+        val allowed = setOf("sans", "system", "serif", "mono")
+        context.guardDataStore.edit { it[Keys.TITLE_FONT] = value.takeIf { v -> v in allowed } ?: "sans" }
+    }
 
     suspend fun setAllowInstaller(value: Boolean) = put(Keys.ALLOW_INSTALLER, value)
 

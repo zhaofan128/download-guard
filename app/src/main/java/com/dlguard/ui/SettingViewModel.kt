@@ -217,6 +217,27 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * 跨应用嗅探：只影响无障碍服务的抓取范围，不改变服务本身是否运行。
+     * 开启时明确提示边界（只抓文件直链、不记录聊天），避免用户误以为在「监听微信」。
+     */
+    fun setCrossAppCapture(value: Boolean) = hotSwitch("cross_app_capture") {
+        runCatching {
+            container.settings.setCrossAppCapture(value)
+            emit(
+                if (value) "已扩展抓取范围：微信/QQ 等内嵌页里的文件直链会出现在首页候选"
+                else "已收窄抓取范围：仅浏览器内的文件直链"
+            )
+        }.onFailure {
+            runCatching { viewModelScope.launch { container.settings.setCrossAppCapture(!value) } }
+        }
+    }
+
+    /** 首页标题字体：即时生效（HomeScreen 直接订阅 settings）。 */
+    fun setTitleFont(value: String) = hotSwitch("title_font_$value") {
+        runCatching { container.settings.setTitleFont(value) }
+    }
+
     fun setDownloadThreads(value: Int) = hotSwitch("download_threads_$value") {
         runCatching {
             container.settings.setDownloadThreads(value)

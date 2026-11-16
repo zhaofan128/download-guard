@@ -59,6 +59,10 @@ data class DownloadTask(
     val filePath: String? = null,
     /** 失败时的 HTTP 状态码（0 = 网络层错误）。 */
     val httpCode: Int = 0,
+    /** 收尾阶段：校验 / 落盘时 UI 要显示具体动作，而不是干巴巴的 100%。 */
+    val stage: DownloadStage = DownloadStage.DOWNLOADING,
+    /** 这个任务是否被全局熔断压过并发（UI 给出解释，避免用户以为滑杆坏了）。 */
+    val throttledByHost: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -82,7 +86,12 @@ class DownloadCenter(
     private val repository: GuardRepository,
     private val settingsStore: SettingsStore,
     /** 插件聚合出的下载策略；每次开始任务时实时读取，插件开关立即生效。 */
-    private val policyProvider: () -> DownloadPolicy = { DownloadPolicy() }
+    private val policyProvider: () -> DownloadPolicy = { DownloadPolicy() },
+    /**
+     * 插件脚本的 URL 重写入口（沙箱执行）；返回 null 表示不改写。
+     * 用函数注入而不是直接依赖 PluginManager，避免下载层反向依赖插件层。
+     */
+    private val urlRewriter: (String) -> String? = { null }
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -112,6 +121,8 @@ class DownloadCenter(
         var lowSince = 0L
         var autoAdjusted = false
         var userAdjusted = false
+        /** 是否被全局熔断压过并发（只用于 UI 解释，不参与调度）。 */
+        var capLimited = false
     }
 
     private val runtimes = ConcurrentHashMap<Long, TaskRuntime>()
@@ -208,11 +219,35 @@ class DownloadCenter(
     private suspend fun runTask(rt: TaskRuntime) {
         val id = rt.id
         val task = _tasks.value.firstOrNull { it.id == id } ?: return
-        val url = task.url
+        var url = task.url
         try {
             val settings = runCatching { settingsStore.settings.first() }.getOrNull()
+            val policy = runCatching { policyProvider() }.getOrDefault(DownloadPolicy())
+
+            // 插件脚本重写（沙箱执行，只做字符串变换）：必须在探测/分段之前完成，
+            // 否则所有 Range 请求都会打到旧地址上。
+            val rewritten = runCatching { urlRewriter(url) }.getOrNull()
+            if (!rewritten.isNullOrBlank() && rewritten != url) {
+                url = rewritten
+                updateTask(id) {
+                    it.copy(
+                        url = rewritten,
+                        // 重写可能换掉文件名（/small/x.jpg → /large/x.jpg），
+                        // 用户没指定名字时跟着新地址重新猜，避免存成旧名
+                        fileName = if (it.preferredName == null) guessName(rewritten) else it.fileName
+                    )
+                }
+                _events.tryEmit("已按插件脚本重写下载地址：${HostCircuitBreaker.hostOf(rewritten) ?: "未知站点"}")
+            }
+
+            val host = HostCircuitBreaker.hostOf(url)
+            val breakerOn = policy.globalBreaker && host != null
+
+            // 全局熔断：同站点任一任务撞过 403/429，新任务进来先把并发压到安全值
+            val cap = if (breakerOn) HostCircuitBreaker.capFor(host!!) else ResumableDownloader.MAX_CONNECTIONS
             val initial = (settings?.downloadThreads ?: 16)
                 .coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)
+                .coerceAtMost(cap)
             val gate = ResumableDownloader.ConnectionGovernor(initial)
             rt.governor = gate
             rt.frozenEta = -1
@@ -220,7 +255,43 @@ class DownloadCenter(
             rt.peakSpeed = 0L
             rt.lowSince = 0L
             rt.autoAdjusted = false
-            val policy = runCatching { policyProvider() }.getOrDefault(DownloadPolicy())
+            if (breakerOn && cap < (settings?.downloadThreads ?: 16)) {
+                rt.capLimited = true
+                updateTask(id) {
+                    it.copy(
+                        connections = initial,
+                        throttledByHost = true,
+                        message = "该站点正在限流，并发已全局降到 $cap"
+                    )
+                }
+            }
+
+            // 熔断冷却：与其硬冲把封禁时间拉长，不如等几秒。最多等 30 秒，避免界面像卡死。
+            if (breakerOn) {
+                val cool = HostCircuitBreaker.cooldownMs(host!!)
+                if (cool > 0) {
+                    val seconds = ((cool + 999) / 1000).coerceAtLeast(1)
+                    updateTask(id) { it.copy(message = "站点限流冷却中，约 $seconds 秒后开始", speed = 0) }
+                    delay(cool.coerceAtMost(30_000L))
+                    updateTask(id) { it.copy(message = null) }
+                }
+            }
+
+            // 旁挂哈希：用户没填校验值时才去旁边找 .sha256/.md5，找到就当官方基准
+            var expectedHash = task.expectedHash
+            if (expectedHash.isNullOrBlank() && policy.sidecarHash) {
+                val found = runCatching { com.dlguard.integrity.SidecarHash.discover(url, task.fileName) }.getOrNull()
+                if (found != null) {
+                    expectedHash = "${found.algorithm}:${found.hash}"
+                    updateTask(id) {
+                        it.copy(
+                            expectedHash = expectedHash,
+                            message = "已自动获取旁挂 ${found.algorithm} 校验值"
+                        )
+                    }
+                    _events.tryEmit("发现官方校验文件，下载完成后自动比对 ${found.algorithm}")
+                }
+            }
 
             var outcome = downloader.download(
                 url = url,
@@ -235,6 +306,8 @@ class DownloadCenter(
                     // 任务已被暂停/删除时（job 取消，isActive 立即变 false）丢弃回调，
                     // 防止收尾阶段的旧进度把 PAUSED/已删除状态又写回 RUNNING。
                     if (rt.job?.isActive != true) return@download
+                    // 跨任务联动降级：别的任务把这个 host 打到 429 了，本任务也要跟着收
+                    if (breakerOn) enforceHostCap(host!!, gate, rt)
                     val now = System.currentTimeMillis()
                     val eta = progress.etaSeconds
                     if (eta > 0) {
@@ -255,8 +328,10 @@ class DownloadCenter(
                             speed = progress.bytesPerSecond,
                             attempt = progress.attempt,
                             connections = progress.connections,
-                            etaSeconds = rt.frozenEta,
-                            hotSwitchable = progress.segmented
+                            etaSeconds = if (progress.stage == DownloadStage.DOWNLOADING) rt.frozenEta else -1,
+                            hotSwitchable = progress.segmented && progress.stage == DownloadStage.DOWNLOADING,
+                            stage = progress.stage,
+                            throttledByHost = t.throttledByHost || rt.capLimited
                         )
                     }
                 }
@@ -267,6 +342,14 @@ class DownloadCenter(
             var throttleRound = 0
             while (!outcome.success) {
                 val code = outcome.httpCode ?: 0
+                // 先记账到全局熔断器：同站点的其它任务下一轮就会看到新的上限
+                if (breakerOn && (code == 429 || code == 403 || code == 503)) {
+                    val hostCap = HostCircuitBreaker.onThrottle(host!!, code)
+                    if (gate.wanted > hostCap) {
+                        gate.request(hostCap)
+                        rt.capLimited = true
+                    }
+                }
                 val maxRounds = if (code == 429) 3 else 1
                 val canThrottle = (code == 429 || code == 403) &&
                     gate.wanted > 1 &&
@@ -305,7 +388,9 @@ class DownloadCenter(
                                 speed = progress.bytesPerSecond,
                                 attempt = progress.attempt,
                                 connections = progress.connections,
-                                hotSwitchable = progress.segmented
+                                hotSwitchable = progress.segmented && progress.stage == DownloadStage.DOWNLOADING,
+                                stage = progress.stage,
+                                throttledByHost = t.throttledByHost || rt.capLimited
                             )
                         }
                     }
@@ -313,7 +398,8 @@ class DownloadCenter(
             }
 
             if (outcome.success) {
-                finishSuccess(task, outcome, policy)
+                if (breakerOn) HostCircuitBreaker.onSuccess(host!!)
+                finishSuccess(task, outcome, policy, expectedHash)
             } else {
                 updateTask(id) { t ->
                     t.copy(
@@ -349,7 +435,8 @@ class DownloadCenter(
     private suspend fun finishSuccess(
         task: DownloadTask,
         outcome: DownloadOutcome,
-        policy: DownloadPolicy
+        policy: DownloadPolicy,
+        expectedHash: String?
     ) {
         val file = outcome.file ?: return
         val integrity = outcome.integrity ?: return
@@ -379,7 +466,7 @@ class DownloadCenter(
             outcome.elapsedMs == 0L -> "\n目标目录已有相同文件（大小一致、校验通过），本次未重复下载"
             else -> ""
         }
-        val hashCheck = verifyExpectedHash(file, task.expectedHash)
+        val hashCheck = verifyExpectedHash(file, expectedHash)
         val summary = integrity.summary() +
             "\n平均 ${speedText(outcome.averageSpeed)} · 用时 ${outcome.elapsedMs / 1000} 秒" +
             extra + hashCheck.summary
@@ -446,6 +533,25 @@ class DownloadCenter(
                     "\n文件已保留在原位置，但内容与发布方公布的值不一致，请从官方渠道重新获取",
                 true
             )
+        }
+    }
+
+    /**
+     * 全局熔断的跨任务联动。
+     *
+     * 这是 1.9.0 的核心改动：退让不再是「各任务自己算自己的」。
+     * 同 host 的任一任务撞上 429/403 后，其余任务的进度回调（≤250ms 一次）会在这里读到
+     * 新的上限并把 gate 压下去，连接数在下个调度周期内退役到安全值。
+     */
+    private fun enforceHostCap(
+        host: String,
+        gate: ResumableDownloader.ConnectionGovernor,
+        rt: TaskRuntime
+    ) {
+        val cap = HostCircuitBreaker.capFor(host)
+        if (gate.wanted > cap) {
+            gate.request(cap)
+            rt.capLimited = true
         }
     }
 

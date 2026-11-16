@@ -54,6 +54,10 @@ class PluginManager(
         const val ID_AUTO_FOLDER = "official.auto-folder"
         const val ID_AUTO_OPEN = "official.auto-open"
         const val ID_CUSTOM_UA = "official.custom-ua"
+        const val ID_GLOBAL_BREAKER = "official.global-breaker"
+        const val ID_DUAL_STACK = "official.dual-stack"
+        const val ID_SIDECAR_HASH = "official.sidecar-hash"
+        const val ID_URL_REWRITE = "official.url-rewrite"
 
         private const val UA = "DownloadGuard/1.4 (+https://github.com/dlguard/plugins)"
     }
@@ -369,6 +373,77 @@ class PluginManager(
                         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 )
             )
+        ),
+        PluginManifest(
+            id = ID_GLOBAL_BREAKER,
+            name = "全局限流熔断",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "同一个站点开多个任务时，任何一个任务撞上 403/429，所有任务一起降并发并短暂冷却。" +
+                "避免「任务 A 已经老实退让、任务 B 还在 256 并发猛冲」把自己这个 IP 彻底送走。",
+            category = PluginManifest.CATEGORY_ACCEL,
+            icon = "🧯",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 按 host 全局记账，跨任务共享并发上限\n· 429 阶梯减半 + 冷却，成功若干次后自动恢复",
+            pinned = true,
+            enabledByDefault = true,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_DUAL_STACK,
+            name = "IPv4/IPv6 双栈竞速",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "解析出多个地址后并发做一次 TCP 探测，按实测延迟排序再连接。" +
+                "专门治移动网络下「IPv6 有地址没路由」导致首包卡十几秒的问题。",
+            category = PluginManifest.CATEGORY_ACCEL,
+            icon = "🛰",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 解析结果按 RTT 排序，黑洞地址自动排到最后\n· 结果缓存 60 秒，切网自动失效",
+            pinned = true,
+            enabledByDefault = true,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_SIDECAR_HASH,
+            name = "旁挂哈希自动校验",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "下载地址旁边通常躺着同名的 .sha256 / .md5 小文件。开启后自动拉取并解析，" +
+                "把它当作本次下载的官方基准，完成后直接告诉你「一致」还是「不符」。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🔖",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 支持 .sha256/.sha256sum/.md5/.sha1 四种命名\n· 校验文件里写的是别的文件名时自动放弃",
+            pinned = true,
+            enabledByDefault = true,
+            config = emptyList()
+        ),
+        PluginManifest(
+            id = ID_URL_REWRITE,
+            name = "URL 重写脚本",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "用一段沙箱 JS 改写下载地址，例如把缩略图换成原图、去掉跟踪参数。" +
+                "脚本只有字符串运算能力：无网络、无文件、无反射，200ms 超时。默认关闭，可自行编辑。",
+            category = PluginManifest.CATEGORY_RESOLVER,
+            icon = "✂️",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· Rhino 沙箱 + 指令计数超时 + ClassShutter\n· 内置示例：清理 utm_/spm/from 等跟踪参数",
+            pinned = true,
+            enabledByDefault = false,
+            script = "out = url.replace(/([?&])(utm_[a-z_]+|spm|from|share_token)=[^&]*/gi, '\$1')" +
+                ".replace(/[?&]\$/g, '').replace(/\\?&/g, '?');",
+            config = listOf(
+                PluginConfigField(
+                    key = "script",
+                    label = "重写脚本",
+                    type = PluginConfigField.TYPE_TEXT,
+                    default = "",
+                    description = "可用变量 url，赋值 out 或返回最后表达式即新地址。留空使用内置示例。" +
+                        "脚本拿不到网络/文件/Java 对象，只做字符串变换。"
+                )
+            )
         )
     )
 
@@ -444,9 +519,47 @@ class PluginManager(
             cleanName = isEnabled(ID_NAME_CLEAN),
             autoFolder = isEnabled(ID_AUTO_FOLDER),
             autoOpen = isEnabled(ID_AUTO_OPEN),
-            userAgent = ua
+            userAgent = ua,
+            globalBreaker = isEnabled(ID_GLOBAL_BREAKER),
+            sidecarHash = isEnabled(ID_SIDECAR_HASH)
         )
     }
+
+    /**
+     * 按当前启用插件把 URL 交给沙箱脚本重写；没有匹配的插件时返回 null。
+     *
+     * 只跑第一个「匹配且改出了不同结果」的脚本，避免多个插件互相覆盖导致行为不可预期。
+     */
+    fun rewriteUrl(url: String): String? {
+        val host = runCatching { java.net.URI(url).host }.getOrNull()?.lowercase() ?: return null
+        val manifests = builtins + _plugins.value.map { it.manifest }
+        for (manifest in manifests) {
+            if (!isEnabled(manifest.id)) continue
+            if (!manifest.matchesHost(host)) continue
+            val script = configValue(manifest.id, "script").takeIf { it.isNotBlank() }
+                ?: manifest.script.takeIf { it.isNotBlank() }
+                ?: continue
+            val result = ScriptSandbox.rewrite(script, url)
+            val rewritten = result.url
+            if (rewritten != null && rewritten != url) {
+                Log.i(TAG, "URL 重写：${manifest.id} → ${scriptHost(rewritten)}")
+                return rewritten
+            }
+            if (result.error != null) Log.w(TAG, "脚本插件 ${manifest.id} 执行失败：${result.error}")
+        }
+        return null
+    }
+
+    private fun PluginManifest.matchesHost(host: String): Boolean {
+        if (matchHosts.isEmpty()) return true
+        return matchHosts.any { rule ->
+            val normalized = rule.lowercase().removePrefix(".").removePrefix("*.")
+            host == normalized || host.endsWith(".$normalized")
+        }
+    }
+
+    private fun scriptHost(url: String): String =
+        runCatching { java.net.URI(url).host ?: url }.getOrDefault(url)
 
     /** 写入一项配置；桥插件的端口/令牌变化会即时重启监听。 */
     fun setConfig(id: String, key: String, value: String) {
@@ -863,6 +976,10 @@ class PluginManager(
             downloadUrl = obj.optString("downloadUrl", ""),
             permissions = permissions,
             config = parseConfig(obj.optJSONArray("config")),
+            script = obj.optString("script", "").takeIf { it.isNotBlank() } ?: "",
+            matchHosts = obj.optJSONArray("matchHosts")?.let { arr ->
+                (0 until arr.length()).mapNotNull { i -> arr.optString(i).trim().takeIf { it.isNotBlank() } }
+            } ?: listOfNotNull(obj.optString("matchHost").trim().takeIf { it.isNotBlank() }),
             pinned = obj.optBoolean("pinned", false),
             enabledByDefault = obj.optBoolean("enabledByDefault", false)
         )

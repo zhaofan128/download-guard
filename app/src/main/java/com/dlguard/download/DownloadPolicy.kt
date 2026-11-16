@@ -23,7 +23,11 @@ data class DownloadPolicy(
     /** 下载并校验通过后自动拉起打开。 */
     val autoOpen: Boolean = false,
     /** 自定义 User-Agent；空串表示用内置移动端 Chrome UA。 */
-    val userAgent: String = ""
+    val userAgent: String = "",
+    /** 全局主机熔断：同站点所有任务共享 403/429 降级状态。 */
+    val globalBreaker: Boolean = true,
+    /** 下载前自动探测旁挂的 .sha256/.md5 校验文件。 */
+    val sidecarHash: Boolean = true
 )
 
 /**

@@ -35,9 +35,15 @@ class AppContainer(private val context: Context) {
 
     /** 应用级下载中心：Activity 退出后下载继续。 */
     val downloadCenter: DownloadCenter by lazy {
-        DownloadCenter(context, downloader, repository, settings) {
-            pluginManager.downloadPolicy()
-        }
+        DownloadCenter(
+            context = context,
+            downloader = downloader,
+            repository = repository,
+            settingsStore = settings,
+            policyProvider = { pluginManager.downloadPolicy() },
+            // 插件脚本重写：沙箱执行，无网络/文件/反射权限
+            urlRewriter = { url -> pluginManager.rewriteUrl(url) }
+        )
     }
 
     /** 插件系统：内置官方插件 + 第三方插件 + 市场索引 + 局域网下载桥。 */

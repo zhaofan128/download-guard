@@ -102,7 +102,7 @@ class GuardRepository(
 
     suspend fun exportCsv(): File = withContext(Dispatchers.IO) {
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
-        val file = File(dir, "guard_records_${Formatters.timestampForName()}.csv")
+        val file = File(dir, "guard_records_${Formatters.timestampForName()}_redacted.csv")
         val records = recordDao.observeAll().first()
         file.bufferedWriter(Charsets.UTF_8).use { writer ->
             writer.write("\uFEFF")
@@ -118,13 +118,16 @@ class GuardRepository(
                         record.entriesChecked.toString(),
                         record.elapsedMs.toString(),
                         record.sourcePackage ?: "",
-                        record.downloadUrl ?: "",
-                        record.quarantinedPath ?: "",
+                        LogRedactor.url(record.downloadUrl),
+                        LogRedactor.path(record.quarantinedPath),
                         record.detail
                     ).joinToString(",") { Formatters.quoteCsv(it) }
                 )
                 writer.write("\n")
             }
+            writer.write("#\n")
+            writer.write(LogRedactor.footer())
+            writer.write("\n")
         }
         file
     }
