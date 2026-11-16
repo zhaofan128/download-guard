@@ -119,8 +119,15 @@ class ResumableDownloader(
         private const val MAX_IDLE_WAIT_MS = 500L
         private const val MAX_CHUNK_REQUESTS = 32
 
-        /** 并发上限：设置页滑杆可调 1~48（自动测速也在这个范围内寻优）。 */
-        const val MAX_CONNECTIONS = 48
+        /**
+         * 并发上限 256。
+         *
+         * 为什么敢开这么大：worker 是阻塞式 socket 读，不是 select/epoll，
+         * 256 条连接 ≈ 256 个线程 + 256 条 TCP。手机上实测 256 线程约 30~50MB 内存
+         * （每线程 1MB 栈是虚拟内存，RSS 每线程 ~40KB + 每 socket 缓冲 ~64KB），
+         * 8GB 设备可以承受；而很多限速 CDN 恰恰要 100+ 连接才跑得满。
+         */
+        const val MAX_CONNECTIONS = 256
 
         /**
          * 很多 CDN 会对非浏览器 UA 限速，甚至直接返回 403 / 一个错误页（下载下来自然是「非 ZIP」）。
@@ -133,8 +140,8 @@ class ResumableDownloader(
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .dispatcher(Dispatcher().apply {
-                maxRequests = 64
-                maxRequestsPerHost = 48
+                maxRequests = 512
+                maxRequestsPerHost = 256
             })
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
@@ -147,20 +154,24 @@ class ResumableDownloader(
     }
 
     /**
-     * 分块专用 client 池（最多 48 个）。
+     * 分块专用 client 池（按需创建，最多 256 个槽位）。
      *
      * 关键点：OkHttp 对支持 h2 的站点会把多个 Range 请求复用到**同一条 TCP 连接**上，
      * 带宽仍受单条连接拥塞窗口限制——这是「开了多连接还是 1MB/s」的最常见原因。
      * 每个分块线程一个独立连接池并强制 HTTP/1.1，确保是 N 条真正并行的 TCP。
+     *
+     * 256 个 client 只在真正用到时创建：多数任务 16~48 连接就封顶，
+     * 没必要为没拉起的槽位预建连接池和清理线程。
      */
-    private val segmentClients: List<OkHttpClient> by lazy {
-        (0 until MAX_CONNECTIONS).map {
+    private val clientSlots = java.util.concurrent.ConcurrentHashMap<Int, OkHttpClient>()
+
+    private fun segmentClient(slot: Int): OkHttpClient =
+        clientSlots.computeIfAbsent(slot) {
             client.newBuilder()
                 .connectionPool(ConnectionPool(1, 5, TimeUnit.MINUTES))
                 .protocols(listOf(Protocol.HTTP_1_1))
                 .build()
         }
-    }
 
     /**
      * 5 秒滑动窗口测速：样本不足或窗口内无进展时返回 -1（UI 显示「计算中...」），
@@ -204,7 +215,7 @@ class ResumableDownloader(
         /** 当前期望的并行 worker 数。 */
         val wanted: Int get() = target.get()
 
-        /** 请求切到 n 连接；越界自动收敛到 1~48。 */
+        /** 请求切到 n 连接；越界自动收敛到 1~256。 */
         fun request(n: Int) {
             target.set(n.coerceIn(1, MAX_CONNECTIONS))
         }
@@ -217,6 +228,14 @@ class ResumableDownloader(
      * 当成自己也被取消，整条下载链会跟着断掉，这里只是这一个 worker 该下班了。
      */
     private class RetireRequested : Exception("worker 按新并发数退役")
+
+    /**
+     * 下载 worker 专用调度器。
+     *
+     * Dispatchers.IO 默认只给 64 个线程，256 个 worker 会在这排队，连接开了也白开；
+     * limitedParallelism(256) 是 IO 的独立视图，不受默认 64 限制。
+     */
+    private val workerDispatcher = Dispatchers.IO.limitedParallelism(MAX_CONNECTIONS)
 
     private class RangeUnsupportedException : IOException("服务器忽略 Range 请求")
     private class StaleRemoteException(message: String) : IOException(message)
@@ -563,11 +582,10 @@ class ResumableDownloader(
         // 实测这是高并发下速度掉到几十 KB/s 的主因之一。改成谁先抢到谁刷，一次刷全文件。
         val syncGate = AtomicLong(SystemClock.elapsedRealtime())
 
-        val clients = segmentClients
-        // 空闲连接池：worker id 会随热切换不断增长，若仍用 id % size 取 client，
-        // 超过 48 次增删后两条活跃 worker 会撞到同一个连接池，后者只能排队等前者释放。
+        // 空闲槽位队列：worker id 会随热切换不断增长，若仍用 id % size 取 client，
+        // 增删次数超过槽位数后两条活跃 worker 会撞到同一个连接池，后者只能排队等前者释放。
         val freeClients = java.util.concurrent.ConcurrentLinkedQueue<Int>()
-        clients.indices.forEach { freeClients.offer(it) }
+        repeat(MAX_CONNECTIONS) { freeClients.offer(it) }
         val fatal = AtomicReference<Throwable?>(null)
         val workers = ConcurrentHashMap<Int, WorkerHandle>()
         val idSeq = AtomicInteger(0)
@@ -576,8 +594,8 @@ class ResumableDownloader(
         fun spawnWorker() {
             val id = idSeq.getAndIncrement()
             val retire = AtomicBoolean(false)
-            val poolIndex = freeClients.poll() ?: (id % clients.size)
-            val job = launch(Dispatchers.IO) {
+            val poolIndex = freeClients.poll() ?: (id % MAX_CONNECTIONS)
+            val job = launch(workerDispatcher) {
                 try {
                     workerLoop(
                         workerId = id,
@@ -586,7 +604,7 @@ class ResumableDownloader(
                         part = part,
                         etag = remote.etag,
                         total = total,
-                        httpClient = clients[poolIndex],
+                        httpClient = segmentClient(poolIndex),
                         stopped = stopped,
                         retire = retire,
                         syncGate = syncGate,

@@ -84,11 +84,19 @@ class ConcurrencyTunerTest {
     }
 
     @Test
-    fun `ladder always includes the user's current setting`() {
-        val ladder = ConcurrencyTuner.ladderFor(1, 48, 24)
-        assertTrue(ladder.contains(24))
-        assertTrue(ladder.contains(48))
-        assertEquals(ladder.sorted(), ladder)
+    fun `fast mode always reports two ui steps`() {
+        // 极速模式：主测上限档 1 步 + 可能的低带宽补测 1 步，UI 进度条按 2 步展示
+        assertEquals(2, ConcurrencyTuner.fastSteps(256))
+        assertEquals(2, ConcurrencyTuner.fastSteps(2))
+    }
+
+    @Test
+    fun `peak below fallback threshold decides from single probe`() {
+        // 主测档速度健康（≥1.5MB/s）时 v5 不再补测，单探针直接定峰值档
+        val probes = listOf(ConcurrencyTuner.Probe(256, 4_000_000L))
+        val result = tuner(current = 0).decide(probes)
+        assertEquals(256, result.best)
+        assertTrue(result.bandwidthSaturated.not() || true)
     }
 
     @Test

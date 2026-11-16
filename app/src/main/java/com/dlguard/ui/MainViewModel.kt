@@ -15,7 +15,6 @@ import com.dlguard.data.SettingsStore
 import com.dlguard.data.db.CheckRecord
 import com.dlguard.data.db.WatchedDir
 import com.dlguard.download.ConcurrencyTuner
-import com.dlguard.download.DownloadUiState
 import com.dlguard.download.ResumableDownloader
 import com.dlguard.service.GuardState
 import com.dlguard.service.NotificationHelper
@@ -61,8 +60,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList<WatchedDir>())
     val guard = GuardState.snapshot
 
-    /** 下载状态挂在应用级 DownloadCenter 上，退出界面不会中断。 */
-    val download = container.downloadCenter.state
+    /** 任务队列挂在应用级 DownloadCenter 上，退出界面不会中断；多任务并行。 */
+    val tasks = container.downloadCenter.tasks
 
     /** 插件状态（首页据此决定是否显示「自动测速」等插件化入口）。 */
     val plugins = container.pluginManager.plugins
@@ -345,10 +344,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _messages.tryEmit("仅支持 http/https 链接")
             return
         }
-        if (container.downloadCenter.isBusy) {
-            _messages.tryEmit("已有下载任务进行中，请等当前任务完成或先取消")
-            return
-        }
         if (_resolving.value) return
         _resolving.value = true
         viewModelScope.launch(Dispatchers.IO) {
@@ -369,28 +364,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun cancelDownload() {
-        container.downloadCenter.cancel()
-    }
+    /** 暂停某个任务：分片与元数据都保留，继续时从断点接着下。 */
+    fun pauseTask(id: Long) = container.downloadCenter.pauseTask(id)
 
-    /** 暂停：分片与元数据都保留，继续时从断点接着下。 */
-    fun pauseDownload() {
-        container.downloadCenter.pause()
-    }
+    /** 继续（暂停）/ 重试（失败）某个任务。 */
+    fun resumeTask(id: Long) = container.downloadCenter.resumeTask(id)
 
-    /** 继续被暂停的任务。 */
-    fun resumeDownload() {
-        container.downloadCenter.resume()
-    }
+    /** 删除某个任务：正在下载就取消并移除（分片保留）。 */
+    fun removeTask(id: Long) = container.downloadCenter.removeTask(id)
 
-    /** 下载中热切换并发：只改闸门，不重启任务。 */
-    fun setDownloadConnections(connections: Int) {
-        container.downloadCenter.setConnections(connections)
-    }
+    /** 清掉已完成/已失败的任务。 */
+    fun clearFinishedTasks() = container.downloadCenter.clearFinished()
 
-    fun dismissDownload() {
-        container.downloadCenter.dismiss()
-    }
+    /** 下载中热切换并发：只改该任务的闸门，不重启任务。 */
+    fun setTaskConnections(id: Long, connections: Int) =
+        container.downloadCenter.setTaskConnections(id, connections)
+
+    /** 设置同时下载的任务数（1~5）。 */
+    fun setMaxParallelTasks(n: Int) = container.downloadCenter.setMaxParallel(n)
 
     // ------------------------------------------------------------ 自动并发测速
 

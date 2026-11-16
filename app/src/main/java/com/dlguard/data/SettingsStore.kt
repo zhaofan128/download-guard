@@ -26,6 +26,9 @@ data class GuardSettings(
     val wifiOnlyDownload: Boolean = false,
     /** 并发连接数：1~48，默认 16（设置页滑杆可调，支持自动测速写回）。 */
     val downloadThreads: Int = 16,
+
+    /** 同时下载的任务数上限：多任务队列的并行度，1~5。 */
+    val maxParallelTasks: Int = 2,
     /** 是否允许通过「通知使用权」从浏览器/网盘通知里抓取下载链接。 */
     val captureNotificationLinks: Boolean = false,
     /** 是否启用无障碍服务抓取浏览器安装包直链。 */
@@ -52,6 +55,7 @@ class SettingsStore(private val context: Context) {
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val WIFI_ONLY = booleanPreferencesKey("wifi_only_download")
         val DOWNLOAD_THREADS = intPreferencesKey("download_threads")
+        val MAX_PARALLEL_TASKS = intPreferencesKey("max_parallel_tasks")
         val CAPTURE_NOTIFICATION_LINKS = booleanPreferencesKey("capture_notification_links")
         val ACCESSIBILITY_CAPTURE = booleanPreferencesKey("accessibility_capture")
         val AUTO_REPAIR_ACCESSIBILITY = booleanPreferencesKey("auto_repair_accessibility")
@@ -70,7 +74,8 @@ class SettingsStore(private val context: Context) {
                 monitorEnabled = prefs[Keys.MONITOR_ENABLED] ?: true,
                 dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
                 wifiOnlyDownload = prefs[Keys.WIFI_ONLY] ?: false,
-                downloadThreads = (prefs[Keys.DOWNLOAD_THREADS] ?: 16).coerceIn(1, 48),
+                downloadThreads = (prefs[Keys.DOWNLOAD_THREADS] ?: 16).coerceIn(1, 256),
+                maxParallelTasks = (prefs[Keys.MAX_PARALLEL_TASKS] ?: 2).coerceIn(1, 5),
                 captureNotificationLinks = prefs[Keys.CAPTURE_NOTIFICATION_LINKS] ?: false,
                 accessibilityCapture = prefs[Keys.ACCESSIBILITY_CAPTURE] ?: false,
                 autoRepairAccessibility = prefs[Keys.AUTO_REPAIR_ACCESSIBILITY] ?: false,
@@ -93,7 +98,11 @@ class SettingsStore(private val context: Context) {
     suspend fun setAllowInstaller(value: Boolean) = put(Keys.ALLOW_INSTALLER, value)
 
     suspend fun setDownloadThreads(value: Int) {
-        context.guardDataStore.edit { it[Keys.DOWNLOAD_THREADS] = value.coerceIn(1, 48) }
+        context.guardDataStore.edit { it[Keys.DOWNLOAD_THREADS] = value.coerceIn(1, 256) }
+    }
+
+    suspend fun setMaxParallelTasks(value: Int) {
+        context.guardDataStore.edit { it[Keys.MAX_PARALLEL_TASKS] = value.coerceIn(1, 5) }
     }
 
     private suspend fun put(key: Preferences.Key<Boolean>, value: Boolean) {

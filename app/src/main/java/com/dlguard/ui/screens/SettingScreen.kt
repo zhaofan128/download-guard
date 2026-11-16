@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dlguard.BuildConfig
 import android.content.Context
 import com.dlguard.core.CrashGuard
+import com.dlguard.download.ResumableDownloader
 import com.dlguard.core.Formatters
 import com.dlguard.core.PermissionHelper
 import com.dlguard.service.DownloadDirs
@@ -200,6 +201,10 @@ fun SettingScreen(
                 ThreadSelector(
                     current = settings.downloadThreads,
                     onSelect = settingViewModel::setDownloadThreads
+                )
+                ParallelTaskSelector(
+                    current = settings.maxParallelTasks,
+                    onSelect = settingViewModel::setMaxParallelTasks
                 )
                 SettingSwitch(
                     title = "触觉反馈",
@@ -574,7 +579,7 @@ private fun ThreadSelector(current: Int, onSelect: (Int) -> Unit) {
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = "拖动选择 1~48 线程；块级调度 + 工作窃取防木桶效应，服务器不支持 Range 时自动退化为单连接。到首页点「自动测速」可实测最快并发并自动写回",
+            text = "拖动选择 1~256 连接；块级调度 + 工作窃取防木桶效应，服务器不支持 Range 时自动退化为单连接。到首页点「自动测速」可实测最快并发并自动写回",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
         )
@@ -603,9 +608,9 @@ private fun ThreadSelector(current: Int, onSelect: (Int) -> Unit) {
         }
         Slider(
             value = display.toFloat(),
-            onValueChange = { display = it.roundToInt().coerceIn(1, 48) },
+            onValueChange = { display = it.roundToInt().coerceIn(1, ResumableDownloader.MAX_CONNECTIONS) },
             onValueChangeFinished = { if (display != current) onSelect(display) },
-            valueRange = 1f..48f,
+            valueRange = 1f..ResumableDownloader.MAX_CONNECTIONS.toFloat(),
             colors = SliderDefaults.colors(
                 thumbColor = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary,
@@ -622,7 +627,75 @@ private fun ThreadSelector(current: Int, onSelect: (Int) -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
             )
             Text(
-                text = "48",
+                text = "${ResumableDownloader.MAX_CONNECTIONS}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            )
+        }
+    }
+}
+
+/** 同时下载的任务数：多任务队列的并行度，超出的任务自动排队。 */
+@Composable
+private fun ParallelTaskSelector(current: Int, onSelect: (Int) -> Unit) {
+    var display by remember(current) { mutableStateOf(current) }
+    Column(Modifier.padding(vertical = 10.dp)) {
+        Text(
+            text = "同时下载任务数",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = "最多同时下载 5 个文件；超出的任务排队等待，前面的完成后自动开始。每个任务都能独立暂停/继续/删除",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        )
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = "$display",
+                style = MaterialTheme.typography.headlineLarge,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "个并行任务",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                modifier = Modifier.padding(bottom = 7.dp)
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                text = "当前生效 $current",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                modifier = Modifier.padding(bottom = 5.dp)
+            )
+        }
+        Slider(
+            value = display.toFloat(),
+            onValueChange = { display = it.roundToInt().coerceIn(1, 5) },
+            onValueChangeFinished = { if (display != current) onSelect(display) },
+            valueRange = 1f..5f,
+            steps = 3,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.18f)
+            )
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = "1",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            )
+            Text(
+                text = "5",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
             )

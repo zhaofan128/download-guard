@@ -220,7 +220,16 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     fun setDownloadThreads(value: Int) = hotSwitch("download_threads_$value") {
         runCatching {
             container.settings.setDownloadThreads(value)
-            emit("并发连接数已设为 $value，下次下载生效")
+            emit("并发连接数已设为 $value，进行中的任务可拖卡片上的滑杆即时切换")
+        }
+    }
+
+    /** 同时下载任务数：即时生效，调大会自动补位开跑排队中的任务。 */
+    fun setMaxParallelTasks(value: Int) = hotSwitch("max_parallel_tasks_$value") {
+        runCatching {
+            container.settings.setMaxParallelTasks(value)
+            container.downloadCenter.setMaxParallel(value)
+            emit("同时下载任务数已设为 $value")
         }
     }
 

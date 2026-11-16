@@ -78,7 +78,9 @@ import com.dlguard.data.GuardStats
 import com.dlguard.data.db.CheckRecord
 import com.dlguard.integrity.Verdict
 import com.dlguard.service.GuardSnapshot
-import com.dlguard.download.DownloadUiState
+import com.dlguard.download.DownloadTask
+import com.dlguard.download.ResumableDownloader
+import com.dlguard.download.TaskPhase
 import com.dlguard.shizuku.ShizukuHelper
 import com.dlguard.ui.MainViewModel
 import com.dlguard.ui.SettingViewModel
@@ -113,7 +115,7 @@ fun HomeScreen(
     val guard by viewModel.guard.collectAsStateWithLifecycle()
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val recent by viewModel.recent.collectAsStateWithLifecycle()
-    val downloadState by viewModel.download.collectAsStateWithLifecycle()
+    val tasks by viewModel.tasks.collectAsStateWithLifecycle()
     val clipboard by viewModel.clipboardSuggestion.collectAsStateWithLifecycle()
     val pendingName by viewModel.pendingFileName.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -214,8 +216,6 @@ fun HomeScreen(
                 onUrlChange = { url = it },
                 onStart = { viewModel.smartDownload(url) },
                 resolving = resolving,
-                onCancel = viewModel::cancelDownload,
-                connections = settings.downloadThreads,
                 onUseClipboard = {
                     val manager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                         as? android.content.ClipboardManager
@@ -224,17 +224,18 @@ fun HomeScreen(
                     }.getOrNull()
                     if (!text.isNullOrBlank()) url = text.trim()
                 },
-                state = downloadState,
                 tuneState = tuneState,
                 autoTuneEnabled = autoTuneEnabled,
                 onTune = { viewModel.startConcurrencyTune(url) },
-                onDismiss = viewModel::dismissDownload,
+                tasks = tasks,
                 onMessage = viewModel::notifyMessage,
+                onPauseTask = viewModel::pauseTask,
+                onResumeTask = viewModel::resumeTask,
+                onRemoveTask = viewModel::removeTask,
+                onClearTasks = viewModel::clearFinishedTasks,
+                onTaskConnections = viewModel::setTaskConnections,
                 onOpenInPage = viewModel::openInSniffer,
-                onOpenFile = fileOpen::open,
-                onPause = viewModel::pauseDownload,
-                onResume = viewModel::resumeDownload,
-                onConnectionsChange = viewModel::setDownloadConnections
+                onOpenFile = fileOpen::open
             )
         }
         item {
@@ -664,20 +665,19 @@ private fun DownloadCard(
     onUrlChange: (String) -> Unit,
     onStart: () -> Unit,
     resolving: Boolean,
-    onCancel: () -> Unit,
     onUseClipboard: () -> Unit,
-    state: DownloadUiState,
     tuneState: MainViewModel.TuneState,
     autoTuneEnabled: Boolean,
     onTune: () -> Unit,
-    connections: Int,
-    onDismiss: () -> Unit,
+    tasks: List<DownloadTask>,
     onMessage: (String) -> Unit,
+    onPauseTask: (Long) -> Unit,
+    onResumeTask: (Long) -> Unit,
+    onRemoveTask: (Long) -> Unit,
+    onClearTasks: () -> Unit,
+    onTaskConnections: (Long, Int) -> Unit,
     onOpenFile: (String) -> Unit,
-    onOpenInPage: (String) -> Unit,
-    onPause: () -> Unit = {},
-    onResume: () -> Unit = {},
-    onConnectionsChange: (Int) -> Unit = {}
+    onOpenInPage: (String) -> Unit
 ) {
     val context = LocalContext.current
     GlassCard(contentPadding = PaddingValues(18.dp)) {
@@ -688,7 +688,7 @@ private fun DownloadCard(
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            text = "最高 48 线程块级调度 · 自动测速找最快并发 · 断点续传 · 每块落盘即 fsync · 完成校验后才落地",
+            text = "最高 256 连接 · 多任务队列 · 下载中热切换并发 · 断点续传 · 完成校验后才落地",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
         )
@@ -717,73 +717,41 @@ private fun DownloadCard(
             )
         )
         Spacer(Modifier.height(10.dp))
-        // 主操作独占一行，次级操作放第二行：按钮文字不再被挤成两行
-        if (state is DownloadUiState.Running) {
-            // 暂停与取消分开：暂停保留分片（可续传），取消才是真的丢掉这个任务
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        // 多任务模型：随时都能往队列里加任务，暂停/删除在每个任务行上单独操作
+        GuardButton(
+            text = when {
+                resolving -> "解析链接中…"
+                LinkSniffer.looksLikeWebPage(url) -> "抓取链接并下载"
+                else -> "加入下载队列"
+            },
+            onClick = onStart,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = url.isNotBlank() && !resolving
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (autoTuneEnabled) {
+                val tuning = tuneState is MainViewModel.TuneState.Probing
                 GuardButton(
-                    text = "暂停",
-                    onClick = onPause,
+                    text = if (tuning) "测速中…" else "自动测速",
+                    onClick = onTune,
                     modifier = Modifier.weight(1f),
+                    enabled = url.isNotBlank() && !tuning,
                     style = GuardButtonStyle.Glass
                 )
                 GuardButton(
-                    text = "取消下载",
-                    onClick = onCancel,
+                    text = "读取剪贴板",
+                    onClick = onUseClipboard,
                     modifier = Modifier.weight(1f),
-                    style = GuardButtonStyle.Danger
+                    style = GuardButtonStyle.Glass
                 )
-            }
-        } else if (state is DownloadUiState.Paused) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            } else {
                 GuardButton(
-                    text = "继续下载",
-                    onClick = onResume,
-                    modifier = Modifier.weight(1f)
-                )
-                GuardButton(
-                    text = "取消",
-                    onClick = onCancel,
+                    text = "读取剪贴板",
+                    onClick = onUseClipboard,
                     modifier = Modifier.weight(1f),
-                    style = GuardButtonStyle.Danger
+                    style = GuardButtonStyle.Glass
                 )
-            }
-        } else {
-            GuardButton(
-                text = when {
-                    resolving -> "解析链接中…"
-                    LinkSniffer.looksLikeWebPage(url) -> "抓取链接并下载"
-                    else -> "开始下载"
-                },
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = url.isNotBlank() && !resolving
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (autoTuneEnabled) {
-                    val tuning = tuneState is MainViewModel.TuneState.Probing
-                    GuardButton(
-                        text = if (tuning) "测速中…" else "自动测速",
-                        onClick = onTune,
-                        modifier = Modifier.weight(1f),
-                        enabled = url.isNotBlank() && !tuning,
-                        style = GuardButtonStyle.Glass
-                    )
-                    GuardButton(
-                        text = "读取剪贴板",
-                        onClick = onUseClipboard,
-                        modifier = Modifier.weight(1f),
-                        style = GuardButtonStyle.Glass
-                    )
-                } else {
-                    GuardButton(
-                        text = "读取剪贴板",
-                        onClick = onUseClipboard,
-                        modifier = Modifier.weight(1f),
-                        style = GuardButtonStyle.Glass
-                    )
-                }
             }
         }
         // 自动测速实时进度：探测到第几档、当前档吞吐、结论与失败原因
@@ -804,10 +772,9 @@ private fun DownloadCard(
             ?.let { "$it　（MB/s）" }
             .orEmpty()
         // 下载一开始就收起测速结论：那条绿字是针对「上一次测速的那条链接」的，
-        // 留在正在下载的卡片上方会让人以为「保持单连接」是本次下载的状态。
+        // 留在正在下载的任务上方会让人以为是本次下载的状态。
         val showTuneHint = tuneHint.isNotEmpty() &&
-            state !is DownloadUiState.Running &&
-            state !is DownloadUiState.Paused
+            tasks.none { it.phase == TaskPhase.RUNNING || it.phase == TaskPhase.QUEUED }
         AnimatedVisibility(
             visible = showTuneHint,
             enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 6 },
@@ -833,71 +800,110 @@ private fun DownloadCard(
                 }
             }
         }
-        AnimatedVisibility(
-            visible = state !is DownloadUiState.Idle,
-            enter = fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 6 },
-            exit = fadeOut(tween(160))
-        ) {
-            Column {
-                Spacer(Modifier.height(12.dp))
-                when (state) {
-                    is DownloadUiState.Running -> DownloadProgressCard(state, onConnectionsChange)
-                    is DownloadUiState.Paused -> PausedCard(
-                        state = state,
-                        onResume = onResume,
-                        onCancel = onCancel
-                    )
-                    is DownloadUiState.Success -> ResultBanner(
-                        success = true,
-                        title = "下载完成 · 校验通过",
-                        message = "${state.fileName}\n${state.summary}",
-                        onDismiss = onDismiss,
-                        onOpen = { onOpenFile(state.path) }
-                    )
-                    is DownloadUiState.Failed -> {
-                        val canRetryInPage = state.httpCode in listOf(403, 404, 410) &&
-                            state.sourceUrl.isNotBlank()
-                        ResultBanner(
-                            success = false,
-                            title = "下载失败",
-                            message = state.message,
-                            onDismiss = onDismiss,
-                            actionText = if (canRetryInPage) "用网页模式打开" else null,
-                            onAction = if (canRetryInPage) {
-                                ({ onOpenInPage(state.sourceUrl) })
-                            } else {
-                                null
-                            }
-                        )
-                    }
-                    DownloadUiState.Idle -> Unit
-                }
-            }
+        if (tasks.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            TaskListSection(
+                tasks = tasks,
+                onPauseTask = onPauseTask,
+                onResumeTask = onResumeTask,
+                onRemoveTask = onRemoveTask,
+                onClearTasks = onClearTasks,
+                onTaskConnections = onTaskConnections,
+                onOpenFile = onOpenFile,
+                onOpenInPage = onOpenInPage
+            )
         }
     }
 }
 
+/**
+ * 下载任务列表：多任务队列的可视化。
+ *
+ * 每个任务独立一行卡片，像桌面下载器那样随意暂停/继续/删除；
+ * 运行中的任务行内直接放并发热切换滑杆。
+ */
 @Composable
-private fun DownloadProgressCard(
-    state: DownloadUiState.Running,
-    onConnectionsChange: (Int) -> Unit
+private fun TaskListSection(
+    tasks: List<DownloadTask>,
+    onPauseTask: (Long) -> Unit,
+    onResumeTask: (Long) -> Unit,
+    onRemoveTask: (Long) -> Unit,
+    onClearTasks: () -> Unit,
+    onTaskConnections: (Long, Int) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onOpenInPage: (String) -> Unit
 ) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            val running = tasks.count { it.phase == TaskPhase.RUNNING }
+            Text(
+                text = "下载任务 · $running 运行 / ${tasks.size} 总数",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+            )
+            Spacer(Modifier.weight(1f))
+            val hasClearable = tasks.any {
+                it.phase == TaskPhase.DONE || it.phase == TaskPhase.FAILED
+            }
+            if (hasClearable) {
+                Text(
+                    text = "清已完成",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onClearTasks)
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                )
+            }
+        }
+        tasks.forEach { task ->
+            TaskRow(
+                task = task,
+                onPauseTask = onPauseTask,
+                onResumeTask = onResumeTask,
+                onRemoveTask = onRemoveTask,
+                onTaskConnections = onTaskConnections,
+                onOpenFile = onOpenFile,
+                onOpenInPage = onOpenInPage
+            )
+        }
+    }
+}
+
+/** 单个任务行卡片：文件名 + 进度 + 操作按钮，多任务下每个任务独立操作。 */
+@Composable
+private fun TaskRow(
+    task: DownloadTask,
+    onPauseTask: (Long) -> Unit,
+    onResumeTask: (Long) -> Unit,
+    onRemoveTask: (Long) -> Unit,
+    onTaskConnections: (Long, Int) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onOpenInPage: (String) -> Unit
+) {
+    val tint = when (task.phase) {
+        TaskPhase.RUNNING -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+        TaskPhase.FAILED -> Danger.copy(alpha = 0.10f)
+        TaskPhase.DONE -> Success.copy(alpha = 0.08f)
+        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.03f)
+    }
     Box(
         Modifier
             .fillMaxWidth()
             .liquidGlass(
                 cornerRadius = 18.dp,
                 config = LocalGlassConfig.current,
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f),
+                tint = tint,
                 elevation = 2.dp
             )
             .padding(14.dp)
     ) {
         Column {
-            // 第一行：文件名 + 百分比
+            // 第一行：文件名 + 状态徽标
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = state.fileName,
+                    text = task.fileName,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -905,69 +911,160 @@ private fun DownloadProgressCard(
                     modifier = Modifier.weight(1f)
                 )
                 Text(
-                    text = if (state.total > 0) "${(state.progress * 100).toInt()}%" else "总长未知",
+                    text = when (task.phase) {
+                        TaskPhase.QUEUED -> "排队中"
+                        TaskPhase.RUNNING ->
+                            if (task.total > 0) "${(task.progress * 100).toInt()}%" else "下载中"
+                        TaskPhase.PAUSED -> "已暂停"
+                        TaskPhase.FAILED -> "失败"
+                        TaskPhase.DONE -> "完成"
+                    },
                     style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.primary
+                    color = when (task.phase) {
+                        TaskPhase.RUNNING -> MaterialTheme.colorScheme.primary
+                        TaskPhase.PAUSED -> MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                        TaskPhase.FAILED -> Danger
+                        TaskPhase.DONE -> Success
+                        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                    }
                 )
             }
-            Spacer(Modifier.height(8.dp))
-            // 第二行：果冻进度条（液态拖尾）
-            JellyProgressBarComponent(progress = state.progress, active = state.speed > 0)
-            Spacer(Modifier.height(8.dp))
-            // 第三行：小字均分对齐（已下载 / 速度 / 连接数 / 剩余时间）
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = buildString {
-                        append(Formatters.bytes(state.downloaded))
-                        if (state.total > 0) append("/${Formatters.bytes(state.total)}")
-                    },
-                    style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+
+            // 运行 / 暂停：进度条与数据行
+            if (task.phase == TaskPhase.RUNNING || task.phase == TaskPhase.PAUSED) {
+                Spacer(Modifier.height(8.dp))
+                JellyProgressBarComponent(
+                    progress = task.progress,
+                    active = task.phase == TaskPhase.RUNNING && task.speed > 0
                 )
-                Text(
-                    text = if (state.speed > 0) Formatters.speed(state.speed) else "计算中...",
-                    style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                )
-                Text(
-                    text = when {
-                        state.connections > 1 -> "${state.connections} 连接"
-                        state.connections == 1 -> "单连接"
-                        else -> "准备中"
-                    },
-                    style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                )
-                Text(
-                    text = when {
-                        state.total <= 0 -> "流式写入"
-                        state.etaSeconds > 0 -> "剩 ${Formatters.durationSeconds(state.etaSeconds)}"
-                        state.progress >= 0.995f -> "即将完成"
-                        else -> "剩余 计算中..."
-                    },
-                    style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = buildString {
+                            append(Formatters.bytes(task.downloaded))
+                            if (task.total > 0) append("/${Formatters.bytes(task.total)}")
+                        },
+                        style = MonoSmallStyle,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                    Text(
+                        text = if (task.speed > 0) Formatters.speed(task.speed)
+                        else if (task.phase == TaskPhase.RUNNING) "计算中..." else "已停",
+                        style = MonoSmallStyle,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                    Text(
+                        text = when {
+                            task.connections > 1 -> "${task.connections} 连接"
+                            task.connections == 1 -> "单连接"
+                            else -> "准备中"
+                        },
+                        style = MonoSmallStyle,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                    Text(
+                        text = when {
+                            task.phase == TaskPhase.PAUSED -> "断点已存"
+                            task.total <= 0 -> "流式写入"
+                            task.etaSeconds > 0 -> "剩 ${Formatters.durationSeconds(task.etaSeconds)}"
+                            task.progress >= 0.995f -> "即将完成"
+                            else -> "剩余 计算中..."
+                        },
+                        style = MonoSmallStyle,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                    )
+                }
+                if (task.phase == TaskPhase.RUNNING && task.hotSwitchable) {
+                    Spacer(Modifier.height(10.dp))
+                    HotSwitchSlider(
+                        current = task.connections,
+                        onChange = { onTaskConnections(task.id, it) }
+                    )
+                }
             }
-            if (state.attempt > 1) {
-                Spacer(Modifier.height(4.dp))
+
+            // 排队中：给一句明确的等待说明
+            if (task.phase == TaskPhase.QUEUED) {
+                Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "第 ${state.attempt} 次尝试（自动退避重试）",
+                    text = "等待并行槽位 · 前面的任务结束后自动开始",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                 )
             }
-            if (state.hotSwitchable) {
-                Spacer(Modifier.height(10.dp))
-                HotSwitchSlider(
-                    current = state.connections,
-                    onChange = onConnectionsChange
+
+            // 失败 / 完成：摘要信息
+            if ((task.phase == TaskPhase.FAILED || task.phase == TaskPhase.DONE) &&
+                !task.message.isNullOrBlank()
+            ) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = task.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
+
+            // 操作行：按阶段给不同按钮，删除永远在最后
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (task.phase) {
+                    TaskPhase.RUNNING -> {
+                        SmallActionButton("暂停") { onPauseTask(task.id) }
+                        SmallActionButton("删除", danger = true) { onRemoveTask(task.id) }
+                    }
+                    TaskPhase.PAUSED -> {
+                        SmallActionButton("继续") { onResumeTask(task.id) }
+                        SmallActionButton("删除", danger = true) { onRemoveTask(task.id) }
+                    }
+                    TaskPhase.QUEUED -> {
+                        SmallActionButton("取消排队", danger = true) { onRemoveTask(task.id) }
+                    }
+                    TaskPhase.FAILED -> {
+                        SmallActionButton("重试") { onResumeTask(task.id) }
+                        if (task.httpCode in listOf(403, 404, 410)) {
+                            SmallActionButton("用网页模式打开") { onOpenInPage(task.url) }
+                        }
+                        SmallActionButton("删除", danger = true) { onRemoveTask(task.id) }
+                    }
+                    TaskPhase.DONE -> {
+                        task.filePath?.let { path ->
+                            SmallActionButton("打开文件") { onOpenFile(path) }
+                        }
+                        SmallActionButton("删除", danger = true) { onRemoveTask(task.id) }
+                    }
+                }
+            }
         }
+    }
+}
+
+/** 任务行内的小操作按钮：胶囊样式，紧凑不抢空间。 */
+@Composable
+private fun SmallActionButton(
+    text: String,
+    danger: Boolean = false,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(
+                (if (danger) Danger else MaterialTheme.colorScheme.primary).copy(alpha = 0.12f)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            color = if (danger) Danger else MaterialTheme.colorScheme.primary
+        )
     }
 }
 
@@ -980,9 +1077,9 @@ private fun DownloadProgressCard(
 @Composable
 private fun HotSwitchSlider(current: Int, onChange: (Int) -> Unit) {
     var dragging by remember { mutableStateOf(false) }
-    var local by remember { mutableIntStateOf(current.coerceIn(1, 48)) }
+    var local by remember { mutableIntStateOf(current.coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)) }
     LaunchedEffect(current) {
-        if (!dragging) local = current.coerceIn(1, 48)
+        if (!dragging) local = current.coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)
     }
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1008,14 +1105,14 @@ private fun HotSwitchSlider(current: Int, onChange: (Int) -> Unit) {
             value = local.toFloat(),
             onValueChange = {
                 dragging = true
-                val next = it.roundToInt().coerceIn(1, 48)
+                val next = it.roundToInt().coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)
                 if (next != local) {
                     local = next
                     onChange(next)
                 }
             },
             onValueChangeFinished = { dragging = false },
-            valueRange = 1f..48f,
+            valueRange = 1f..ResumableDownloader.MAX_CONNECTIONS.toFloat(),
             colors = SliderDefaults.colors(
                 thumbColor = MaterialTheme.colorScheme.primary,
                 activeTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
@@ -1023,61 +1120,6 @@ private fun HotSwitchSlider(current: Int, onChange: (Int) -> Unit) {
             ),
             modifier = Modifier.fillMaxWidth()
         )
-    }
-}
-
-/** 暂停态卡片：进度已落盘，给一条明确的「继续」路径。 */
-@Composable
-private fun PausedCard(
-    state: DownloadUiState.Paused,
-    onResume: () -> Unit,
-    onCancel: () -> Unit
-) {
-    val fraction = if (state.total > 0) {
-        (state.downloaded.toFloat() / state.total).coerceIn(0f, 1f)
-    } else {
-        0f
-    }
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .liquidGlass(
-                cornerRadius = 18.dp,
-                config = LocalGlassConfig.current,
-                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.04f),
-                elevation = 2.dp
-            )
-            .padding(14.dp)
-    ) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = state.fileName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    text = "已暂停",
-                    style = MonoSmallStyle,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            JellyProgressBarComponent(progress = fraction, active = false)
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = buildString {
-                    append(Formatters.bytes(state.downloaded))
-                    if (state.total > 0) append(" / ${Formatters.bytes(state.total)}")
-                    append("　·　分片已保留，继续时从断点接着下")
-                },
-                style = MonoSmallStyle,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-            )
-        }
     }
 }
 

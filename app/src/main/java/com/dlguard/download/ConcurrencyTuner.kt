@@ -32,11 +32,12 @@ import java.util.concurrent.atomic.AtomicLong
  *  - 采样窗口 1.2 秒，够跑出稳态，又不会让用户觉得慢；
  *  - 每档最多读 48MB（实际受 1.2 秒限制，通常 3~8MB）。
  *
- * v4 的变化（用户反馈「测速太慢，直接给最快值」）：
- *  - 不再跑 7 档全阶梯（要 8~15 秒），改成 **16 → 48 两档**，2~3 秒出结论；
- *  - 推荐口径从「达到峰值 95% 的最小并发」改为**峰值所在档位**——
- *    用户要的是最快，不是最省资源；
- *  - 当前设置实测已达峰值 95% 时仍然保留，不会把 48 无故降下去。
+ * v5 的变化（用户要求「测速压到极限」）：
+ *  - 连两档也不跑了：**只测上限档一档 600ms**，约 0.7 秒出结论（v4 要 2~3 秒）；
+ *  - 只有实测速度 < 1.5MB/s（低带宽，高连接握手开销占比大、测不准）才补测 16 档 500ms；
+ *  - 高并发被 CDN 惩罚的场景交给下载中的「自适应降并发」兜底（连续 8 秒掉速自动降），
+ *    测速阶段不再花时间验证它；
+ *  - 推荐值就是实测峰值档，不做「最省资源」折中。
  */
 class ConcurrencyTuner(
     baseClient: OkHttpClient,
@@ -67,38 +68,36 @@ class ConcurrencyTuner(
     )
 
     companion object {
-        /**
-         * 探测阶梯：数量少、跨度大。旧版 11 档每档 5 秒，用户要等近一分钟；
-         * 现在 7 档 × 1.2 秒 ≈ 8.4 秒就能看完整条曲线。
-         */
+        /** 兼容保留：UI 曲线展示仍可能引用。极速模式下不再按阶梯逐档跑。 */
         val LADDER = listOf(1, 2, 4, 8, 16, 32, 48)
 
-        /** 按起始值/上限/当前设置裁剪后的实际阶梯。 */
-        fun ladderFor(start: Int, max: Int, current: Int = 0): List<Int> {
-            val begin = start.coerceIn(1, 48)
-            val end = max.coerceIn(begin, 48)
-            val base = (listOf(begin) + LADDER.filter { it > begin && it <= end }).distinct()
-            val withCurrent = if (current in (begin + 1)..end) base + current else base
-            return withCurrent.distinct().sorted()
-        }
+        /** 主测档位采样时长：600ms 已能跑出稳态，极限压时间就压在这里。 */
+        private const val LEVEL_TIME_MS = 600L
 
-        /** 单档稳态采样时长。900ms 足够跑出稳态，又不至于让用户干等。 */
-        private const val LEVEL_TIME_MS = 900L
+        /** 主测档硬超时（含握手）：256 连接握手要排队，预算放宽到 2.4 秒。 */
+        private const val LEVEL_TIMEOUT_MS = 2_400L
 
-        /** 整档硬超时（含 TCP/TLS 握手与排队）。 */
-        private const val LEVEL_TIMEOUT_MS = 2_200L
+        /** 补测档（低带宽时才跑）：16 连接在慢网络上握手快、测得更准。 */
+        private const val FALLBACK_LEVEL = 16
 
-        /** 快速模式的两档：足够判断「多连接是否有收益」。 */
-        val FAST_LADDER = listOf(16, 48)
+        /** 补测档的采样时长与硬超时。 */
+        private const val FALLBACK_TIME_MS = 500L
+        private const val FALLBACK_TIMEOUT_MS = 1_800L
 
-        /** 快速模式的档数（UI 进度条用）。 */
-        fun fastSteps(max: Int): Int = FAST_LADDER.count { it <= max.coerceIn(2, 48) }.coerceAtLeast(1)
+        /** 主测结果低于该速度（1.5MB/s）时视为低带宽，补测一档。 */
+        private const val LOW_BANDWIDTH_BPS = 1536L * 1024
 
-        /** 所有档位共用的探测窗口：48MB，保证字节级可比。 */
-        private const val WINDOW_BYTES = 48L * 1024 * 1024
+        /** UI 进度步数：主测 1 步 + 可能的补测 1 步。 */
+        fun fastSteps(max: Int): Int = 2
 
-        /** 单连接最小段长。 */
-        private const val MIN_SEGMENT = 96L * 1024
+        /**
+         * 探测窗口：32MB。256 连接时每段 125KB（≥ 32KB 最小段长），
+         * 窗口再小高并发档会被最小段长截断，测不满 256 条连接。
+         */
+        private const val WINDOW_BYTES = 32L * 1024 * 1024
+
+        /** 单连接最小段长。降到 32KB，让 256 连接每条都有活干。 */
+        private const val MIN_SEGMENT = 32L * 1024
 
         /** 文件太小（< 8MB）时多连接本来就无意义。 */
         private const val MIN_TOTAL = 8L * 1024 * 1024
@@ -121,9 +120,9 @@ class ConcurrencyTuner(
 
     private val client: OkHttpClient = baseClient.newBuilder()
         .dispatcher(Dispatcher().apply {
-            // 48 连接同步 execute 会占满默认配额，必须放宽，否则最后几条要排队
-            maxRequests = 128
-            maxRequestsPerHost = 128
+            // 同步 execute() 不走这个配额，但保险起见放宽，避免任何隐式排队
+            maxRequests = 512
+            maxRequestsPerHost = 256
         })
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(6, TimeUnit.SECONDS)
@@ -151,17 +150,23 @@ class ConcurrencyTuner(
             )
         }
 
-        val top = maxConcurrency.coerceIn(2, 48)
-        val mid = FAST_LADDER.first().coerceAtMost(top).coerceAtLeast(1)
-        val ladder = if (mid >= top) listOf(top) else listOf(mid, top)
-        val probes = ArrayList<Probe>(ladder.size)
+        val top = maxConcurrency.coerceIn(2, ResumableDownloader.MAX_CONNECTIONS)
+        val probes = ArrayList<Probe>(2)
 
-        for ((index, concurrency) in ladder.withIndex()) {
-            val speed = probeLevel(url, total, concurrency)
-            val probe = Probe(concurrency, speed)
-            probes += probe
-            onProbe(probe, index + 1, ladder.size)
+        // 极速主测：只测上限档一档，600ms 采样
+        val topSpeed = probeLevel(url, total, top, LEVEL_TIME_MS, LEVEL_TIMEOUT_MS)
+        probes += Probe(top, topSpeed)
+        onProbe(probes.last(), 1, 2)
+
+        if (topSpeed >= LOW_BANDWIDTH_BPS || topSpeed < 0 || top <= FALLBACK_LEVEL) {
+            // 速度健康（或整档失败——补测也大概率失败）：直接出结论
+            return@withContext decide(probes)
         }
+
+        // 低带宽：256 条连接的握手开销占比过大、测不准，补测 16 档取峰值
+        val fallbackSpeed = probeLevel(url, total, FALLBACK_LEVEL, FALLBACK_TIME_MS, FALLBACK_TIMEOUT_MS)
+        probes += Probe(FALLBACK_LEVEL, fallbackSpeed)
+        onProbe(probes.last(), 2, 2)
 
         decide(probes)
     }
@@ -263,7 +268,13 @@ class ConcurrencyTuner(
      * 计时从首字节到达开始，到最后一个字节到达结束——握手开销不计入，
      * 这和真实下载的稳态吞吐口径一致。
      */
-    private fun probeLevel(url: String, total: Long, concurrency: Int): Long {
+    private fun probeLevel(
+        url: String,
+        total: Long,
+        concurrency: Int,
+        sampleMs: Long = LEVEL_TIME_MS,
+        timeoutMs: Long = LEVEL_TIMEOUT_MS
+    ): Long {
         val window = minOf(WINDOW_BYTES, total)
         val maxStart = (total - window).coerceAtLeast(0L)
         val windowStart = (total / 3L).coerceIn(0L, maxStart)
@@ -297,8 +308,8 @@ class ConcurrencyTuner(
                         while (localLeft > 0) {
                             val dl = lastData.get()
                             // 采样窗口从首字节起算 1.2 秒；未收到首字节时用整档硬超时兜底
-                            val deadline = if (dl > 0) dataStart.get() + LEVEL_TIME_MS
-                            else requestAt + LEVEL_TIMEOUT_MS
+                            val deadline = if (dl > 0) dataStart.get() + sampleMs
+                            else requestAt + timeoutMs
                             if (SystemClock.elapsedRealtime() > deadline) break
                             if (quota.get() <= 0) break
                             val want = minOf(buffer.size.toLong(), localLeft, quota.get()).toInt()
@@ -316,12 +327,13 @@ class ConcurrencyTuner(
             }
         }
 
-        val pool = Executors.newFixedThreadPool(concurrency) { r ->
-            Thread(r, "tune-probe").apply { isDaemon = true }
+        // cached 池：按需建线程，主测 256 并发时才真的到 256，空档不占内存
+        val pool = Executors.newCachedThreadPool { r ->
+            Thread(r, "tune-probe").apply { isDaemon = true; priority = Thread.MIN_PRIORITY + 1 }
         }
         try {
             // 一次性收口：总超时 = 握手预算 + 采样窗口，不会逐条累加
-            pool.invokeAll(tasks, LEVEL_TIMEOUT_MS + LEVEL_TIME_MS, TimeUnit.MILLISECONDS)
+            pool.invokeAll(tasks, timeoutMs + sampleMs, TimeUnit.MILLISECONDS)
         } finally {
             pool.shutdownNow()
         }
