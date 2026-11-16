@@ -1076,7 +1076,9 @@ private fun TaskRow(
                     }
                     TaskPhase.FAILED -> {
                         SmallActionButton("重试") { onResumeTask(task.id) }
-                        if (task.httpCode in listOf(403, 404, 410)) {
+                        // 401/403 是登录态/一次性链接，404/410 是链接失效：
+                        // 这些都能靠 WebView 带着真实来源页重新走一遍，比反复重试有用
+                        if (task.httpCode in listOf(401, 403, 404, 410)) {
                             SmallActionButton("用网页模式打开") { onOpenInPage(task.url) }
                         }
                         SmallActionButton("删除", danger = true) { onRemoveTask(task.id) }

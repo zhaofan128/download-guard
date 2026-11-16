@@ -329,9 +329,17 @@ class ResumableDownloader(
             probe(trimmedUrl, ua, referer, cookie)
         } catch (e: CancellationException) {
             throw e
+        } catch (e: HttpStatusException) {
+            // 探测阶段就被服务器拒绝：带上状态码，UI 才能给出「用网页模式打开」这类可操作的出口。
+            // HTTP/2 没有 reason phrase（message 为空），所以文案完全依赖 code 翻译。
+            return@withContext DownloadOutcome(
+                error = describeHttp(e.code, e.message),
+                url = trimmedUrl,
+                httpCode = e.code
+            )
         } catch (e: Exception) {
             return@withContext DownloadOutcome(
-                error = "无法连接下载地址：${e.javaClass.simpleName} ${e.message ?: ""}",
+                error = "无法连接下载地址：${describeNetwork(e)}",
                 url = trimmedUrl
             )
         }
@@ -452,27 +460,20 @@ class ResumableDownloader(
 
     // ---------------------------------------------------------------- 探测
 
-    /** 把 HTTP 状态码翻成用户能照着做的提示，而不是只丢一个 403。 */
-    private fun describeHttp(code: Int, message: String?): String = when (code) {
-        403 -> "服务器拒绝访问（HTTP 403）。这类链接常是一次性的，或需要浏览器验证 / 登录态；" +
-            "请回原网页重新点下载，或用首页的「抓取链接并下载」让 App 带上来源页与 Cookie"
-        404 -> "文件不存在（HTTP 404），链接可能已失效，回原网页重新获取"
-        410 -> "文件已被服务器删除（HTTP 410）"
-        429 -> "请求太频繁（HTTP 429），等一分钟再试"
-        503 -> "服务器暂时不可用（HTTP 503），稍后再试"
-        else -> "HTTP $code：${message?.takeIf { it.isNotBlank() } ?: "服务器拒绝了请求"}"
-    }
+    private fun describeHttp(code: Int, message: String?): String = DownloadErrors.http(code, message)
 
-    /**
-     * 用一个 1 字节 Range 请求同时拿到：总长度、是否真的支持 Range、ETag、文件名。
-     * 比 HEAD 准（很多 CDN 的 HEAD 不带 Accept-Ranges），代价只有一个 RTT。
-     */
+    private fun describeNetwork(e: Exception): String = DownloadErrors.network(e)
+
     /** 网页嗅探来的直链常需要携带来源页与登录态，否则 403。 */
     private fun Request.Builder.sniffHeaders(referer: String?, cookie: String?): Request.Builder = apply {
         if (!referer.isNullOrBlank()) header("Referer", referer)
         if (!cookie.isNullOrBlank()) header("Cookie", cookie)
     }
 
+    /**
+     * 用一个 1 字节 Range 请求同时拿到：总长度、是否真的支持 Range、ETag、文件名。
+     * 比 HEAD 准（很多 CDN 的 HEAD 不带 Accept-Ranges），代价只有一个 RTT。
+     */
     private fun probe(
         url: String,
         ua: String,
@@ -529,7 +530,10 @@ class ResumableDownloader(
                 throw HttpStatusException(response.code, response.message, retryAfterSeconds(response))
             }
         } catch (e: HttpStatusException) {
-            if (e.code != 405 && e.code != 400 && e.code != 501 && e.code != 403) throw e
+            // 400/403/405/501：Range 被拒，退 HEAD 再退单流
+            // 408/429/5xx：临时性故障，别在探测阶段就判死，交给下载阶段按 Retry-After 退避重试
+            val transient = e.code == 408 || e.code == 429 || e.code >= 500
+            if (!transient && e.code != 405 && e.code != 400 && e.code != 501 && e.code != 403) throw e
         }
         // Range 探测被拒：退回 HEAD（有些服务器只允许 HEAD 拿长度）
         head(url, ua, referer, cookie)?.let { return it }
