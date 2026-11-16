@@ -408,8 +408,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val probe = LinkSniffer.probe(trimmed)
                 when {
-                    // 探测失败：可能是不支持 HEAD 的直链，直接交给下载器再试一次
-                    probe == null -> container.downloadCenter.start(trimmed)
+                    // 探测失败（超时 / DNS / 站点拒绝 HEAD）时不能一律当直链：
+                    // 像 github.com/xxx/releases 这种页面地址会被当成文件，下回来一个 HTML 空壳。
+                    // 没有文件后缀就按网页处理，交给 WebView 抓真实地址。
+                    probe == null -> {
+                        if (LinkSniffer.looksLikeWebPage(trimmed)) {
+                            _sniffRequest.tryEmit(trimmed)
+                            _messages.emit("没探到文件，改用网页模式加载页面…")
+                        } else {
+                            container.downloadCenter.start(trimmed)
+                        }
+                    }
                     probe.isHtml -> {
                         _sniffRequest.tryEmit(trimmed)
                         _messages.emit("检测到网页，正在加载页面抓取真实下载地址…")

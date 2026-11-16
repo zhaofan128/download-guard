@@ -1,6 +1,7 @@
 package com.dlguard.download
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.ConnectException
@@ -36,5 +37,16 @@ class DownloadErrorsTest {
         assertTrue(DownloadErrors.network(SocketTimeoutException("timeout")).contains("连接超时"))
         assertTrue(DownloadErrors.network(ConnectException("refused")).contains("连接被拒绝"))
         assertTrue(DownloadErrors.network(IllegalStateException("boom")).contains("IllegalStateException"))
+    }
+
+    @Test
+    fun `网页响应按页面处理而不是当文件存`() {
+        assertTrue(isHtmlDocument("text/html; charset=utf-8", -1L))
+        assertTrue(isHtmlDocument("application/xhtml+xml", 1024L))
+        // 少数站点给真实文件配错类型，大文件放行
+        assertFalse(isHtmlDocument("text/html", 8L * 1024 * 1024))
+        assertFalse(isHtmlDocument("application/vnd.android.package-archive", -1L))
+        assertFalse(isHtmlDocument(null, 100L))
+        assertTrue(DownloadErrors.htmlPage().contains("网页"))
     }
 }

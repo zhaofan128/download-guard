@@ -23,8 +23,16 @@ object DownloadErrors {
         else -> "HTTP $code：${reason?.takeIf { it.isNotBlank() } ?: "服务器拒绝了请求"}"
     }
 
-    fun network(e: Exception): String = when (e) {
-        is java.net.UnknownHostException -> "域名解析失败，检查网络或代理（${e.message ?: "未知主机"}）"
+    /**
+     * 地址返回的是网页而不是文件时用这条。
+     * 典型场景：把 `github.com/xxx/releases` 这种页面地址粘进下载框，
+     * 结果下回来一个只有几 KB 的 HTML，用户以为下到了安装包。
+     */
+    fun htmlPage(): String =
+        "这个地址返回的是网页，不是文件。请让 App 打开页面抓取真实下载地址" +
+            "（首页会自动切到网页模式），或直接粘贴以 .apk / .zip 等结尾的直链"
+
+    fun network(e: Exception): String = when (e) {        is java.net.UnknownHostException -> "域名解析失败，检查网络或代理（${e.message ?: "未知主机"}）"
         is java.net.SocketTimeoutException -> "连接超时，服务器没有响应"
         is javax.net.ssl.SSLException -> "TLS 握手失败，可能是证书问题或代理拦截"
         is java.net.ConnectException -> "连接被拒绝，可能被网络屏蔽"

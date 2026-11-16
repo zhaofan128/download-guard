@@ -31,6 +31,19 @@ data class DownloadPolicy(
 )
 
 /**
+ * 判定「这个响应其实是网页，不是文件」。
+ *
+ * 直接把页面当文件下是典型的误操作：存下来是个只有几 KB 的 .html 空壳，进度条跑完、
+ * 任务标成完成，用户还以为下到了东西。4MB 以上的 text/html 当文件放行——少数站点会给
+ * 真实文件配错 Content-Type，宁可放过也不要拦错。
+ */
+fun isHtmlDocument(contentType: String?, contentLength: Long): Boolean {
+    val type = contentType?.lowercase().orEmpty()
+    if (!type.contains("text/html") && !type.contains("application/xhtml")) return false
+    return contentLength < 4L * 1024 * 1024
+}
+
+/**
  * 令牌桶限速器（全局共享，48 个 worker 合计不超过设定速率）。
  *
  * 实现要点：桶容量 = 1 秒的量，按实际经过的时间补充令牌。

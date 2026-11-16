@@ -343,6 +343,10 @@ class ResumableDownloader(
                 url = trimmedUrl
             )
         }
+        // 探测已经知道是网页：省掉一次完整 GET，也别把 HTML 当文件存下来
+        if (isHtmlDocument(remote.contentType, remote.totalBytes)) {
+            return@withContext DownloadOutcome(error = DownloadErrors.htmlPage(), url = trimmedUrl)
+        }
         val fileName = resolveFileName(trimmedUrl, preferredName, remote, policy)
         val targetDir = resolveTargetDir(fileName, policy)
         val part = File(targetDir, "$fileName.part")
@@ -1030,6 +1034,11 @@ class ResumableDownloader(
                 throw StaleRemoteException("416 且本地分片不完整，清理后重下")
             }
             if (!response.isSuccessful) throw HttpStatusException(response.code, response.message, retryAfterSeconds(response))
+            // 探测没拿到类型（多半是超时降级成单流）时的第二道闸：
+            // 页面不是文件，存下来只是个 .html 空壳，还会让用户以为下载成功了
+            if (isHtmlDocument(response.header("Content-Type"), response.body?.contentLength() ?: -1L)) {
+                return DownloadOutcome(error = DownloadErrors.htmlPage(), url = url, httpCode = response.code)
+            }
             val body = response.body ?: throw IOException("响应体为空")
             val partial = response.code == 206
             var total = when {
