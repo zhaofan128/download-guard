@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -45,6 +44,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -102,7 +102,12 @@ fun BtScreen(viewModel: BtViewModel, bottomInset: Dp = 86.dp) {
             .padding(bottom = bottomInset)
     ) {
         Spacer(Modifier.height(8.dp))
-        Text("BT / 磁力下载", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        Text(
+            "BT / 磁力下载",
+            style = MaterialTheme.typography.headlineSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
         Text(
             "DHT 节点 $dhtNodes · 完成后的任务持续做种，直到你手动暂停或删除",
             style = MaterialTheme.typography.bodySmall,
@@ -110,37 +115,66 @@ fun BtScreen(viewModel: BtViewModel, bottomInset: Dp = 86.dp) {
         )
         Spacer(Modifier.height(12.dp))
 
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                label = { Text("magnet: 链接 或 .torrent 路径") },
-                placeholder = { Text("magnet:?xt=urn:btih:…") },
-                singleLine = true,
-                modifier = Modifier.weight(1f),
-                colors = OutlinedTextFieldDefaults.colors()
+        OutlinedTextField(
+            value = input,
+            onValueChange = { input = it },
+            label = { Text("magnet: 链接 或 .torrent 路径") },
+            placeholder = {
+                Text(
+                    "magnet:?xt=urn:btih:…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                )
+            },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            textStyle = MaterialTheme.typography.bodyMedium,
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color.Transparent,
+                unfocusedContainerColor = Color.Transparent,
+                disabledContainerColor = Color.Transparent,
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.14f),
+                focusedLabelColor = MaterialTheme.colorScheme.primary,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+                cursorColor = MaterialTheme.colorScheme.primary
             )
-            Spacer(Modifier.width(8.dp))
-            IconButton(onClick = { torrentPicker.launch("application/x-bittorrent") }) {
-                Icon(Icons.Filled.Add, contentDescription = "选择种子文件")
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = {
+                    if (input.isNotBlank()) {
+                        viewModel.add(input)
+                        input = ""
+                    }
+                },
+                modifier = Modifier.weight(1f),
+                enabled = input.isNotBlank()
+            ) {
+                Text("添加磁力链接", style = MaterialTheme.typography.bodyMedium)
             }
-            Button(onClick = {
-                if (input.isNotBlank()) {
-                    viewModel.add(input)
-                    input = ""
-                }
-            }) { Icon(Icons.Filled.Add, contentDescription = null) }
+            OutlinedButton(
+                onClick = { torrentPicker.launch("application/x-bittorrent") },
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("选种子文件", style = MaterialTheme.typography.bodyMedium)
+            }
         }
 
         Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
+            Modifier.fillMaxWidth().padding(top = 4.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "限速：↓ ${if (limits.downloadKb <= 0) "不限" else formatRate(limits.downloadKb * 1024L)}" +
                     "  ↑ ${if (limits.uploadKb <= 0) "不限" else formatRate(limits.uploadKb * 1024L)}",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
             )
             TextButton(onClick = { showLimitDialog = true }) { Text("设置") }
         }
@@ -149,12 +183,17 @@ fun BtScreen(viewModel: BtViewModel, bottomInset: Dp = 86.dp) {
         if (tasks.isEmpty()) {
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("还没有 BT 任务", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "还没有 BT 任务",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                    )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "粘贴磁力链接，或点文件夹图标选 .torrent。\n元数据通过 DHT 获取，可能需要几十秒。",
+                        "粘贴磁力链接后点上面的「添加磁力链接」，或点「选种子文件」挑 .torrent。\n元数据通过 DHT 获取，可能需要几十秒。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
             }
@@ -240,6 +279,7 @@ private fun BtTaskCard(
                         task.name,
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -266,7 +306,8 @@ private fun BtTaskCard(
             Text(
                 "↓ ${formatRate(task.downloadRate)}   ↑ ${formatRate(task.uploadRate)}" +
                     "   ${formatBytes(task.downloaded)} / ${formatBytes(task.total)}",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
             )
             Text(
                 "种子 ${task.seeds} · 节点 ${task.dhtNodes} · 已上传 ${formatBytes(task.totalUploaded)}" +

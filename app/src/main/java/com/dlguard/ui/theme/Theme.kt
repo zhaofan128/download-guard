@@ -3,6 +3,7 @@ package com.dlguard.ui.theme
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -39,9 +40,13 @@ fun DownloadGuardTheme(
         if (darkTheme) darkGlassConfig(lowRamDevice) else lightGlassConfig(lowRamDevice)
     }
     val motionEnabled = rememberMotionEnabled()
+    // Material3 的 LocalContentColor 默认是纯黑，只有 Surface/Scaffold 才会改写它。
+    // 本应用是「全屏渐变 + 玻璃卡片」的布局，页面根节点没有 Surface，一旦有 Text 忘了
+    // 显式指定颜色就会变黑字（深色背景下直接看不见）。这里给全局兜底为 onBackground。
     CompositionLocalProvider(
         LocalGlassConfig provides glass,
-        LocalMotionEnabled provides motionEnabled
+        LocalMotionEnabled provides motionEnabled,
+        LocalContentColor provides scheme.onBackground
     ) {
         MaterialTheme(
             colorScheme = scheme,
