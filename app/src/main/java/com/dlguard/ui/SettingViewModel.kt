@@ -9,8 +9,10 @@ import com.dlguard.core.PermissionHelper
 import com.dlguard.data.GuardSettings
 import com.dlguard.service.ClipboardWatchService
 import com.dlguard.service.ServiceController
+import com.dlguard.relay.RelayService
 import com.dlguard.shizuku.PrivilegeOps
 import com.dlguard.shizuku.ShizukuHelper
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -22,6 +24,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 设置页 ViewModel：所有开关的「热生效引擎」。
@@ -236,6 +239,72 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     /** 首页标题字体：即时生效（HomeScreen 直接订阅 settings）。 */
     fun setTitleFont(value: String) = hotSwitch("title_font_$value") {
         runCatching { container.settings.setTitleFont(value) }
+    }
+
+    // ------------------------------------------------------------ 接力下载
+
+    /** 客户端开关：打开后所有下载走网关，关闭恢复本机直连（下次请求即生效）。 */
+    fun setRelayClientEnabled(value: Boolean) = hotSwitch("relay_client_$value") {
+        runCatching {
+            val s = settings.value
+            if (value && s.relayHost.isBlank()) {
+                emit("先填写网关地址（网关设备上会显示本机 IP）")
+            } else {
+                container.settings.setRelayClientEnabled(value)
+                emit(
+                    if (value) "接力已开启：下载走 ${s.relayHost}:${s.relayPort}"
+                    else "接力已关闭：恢复本机直连"
+                )
+            }
+        }
+    }
+
+    fun saveRelayTarget(host: String, portText: String, token: String) = hotSwitch("relay_target") {
+        runCatching {
+            val port = portText.toIntOrNull()?.coerceIn(1, 65535) ?: 8899
+            container.settings.setRelayTarget(host, port, token)
+            emit("网关参数已保存")
+        }
+    }
+
+    /** 开启网关：没有接入码就生成一个 6 位码，客户端照着输。 */
+    fun startRelayGateway() = hotSwitch("relay_gateway_on") {
+        runCatching {
+            val current = settings.value
+            val token = current.relayToken.takeIf { it.length >= 4 }
+                ?: (100000..999999).random().toString()
+            if (token != current.relayToken) {
+                container.settings.setRelayTarget(current.relayHost, current.relayPort, token)
+            }
+            RelayService.start(context, current.relayPort.coerceIn(1024, 65535), token)
+            emit("接力网关已启动 · 接入码 $token")
+        }
+    }
+
+    fun stopRelayGateway() = hotSwitch("relay_gateway_off") {
+        runCatching {
+            RelayService.stop(context)
+            emit("接力网关已停止")
+        }
+    }
+
+    /** 只测 TCP 能不能连上：连得上说明热点/地址没问题，认证是下一步的事。 */
+    fun testRelay() {
+        val s = settings.value
+        if (s.relayHost.isBlank()) {
+            emit("先填写网关地址")
+            return
+        }
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    java.net.Socket().use {
+                        it.connect(java.net.InetSocketAddress(s.relayHost, s.relayPort), 3_000)
+                    }
+                }.isSuccess
+            }
+            emit(if (ok) "已连上 ${s.relayHost}:${s.relayPort}" else "连不上，检查对方是否开了热点与网关")
+        }
     }
 
     fun setDownloadThreads(value: Int) = hotSwitch("download_threads_$value") {

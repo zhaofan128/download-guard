@@ -387,6 +387,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (_resolving.value) return
         _resolving.value = true
+        // 接力模式下本机没有外网，probe 必然超时；网页交给网关 /fetch，文件直接走代理下载
+        if (com.dlguard.relay.RelayState.active) {
+            viewModelScope.launch(Dispatchers.IO) {
+                try {
+                    if (looksLikeFileUrl(trimmed)) {
+                        container.downloadCenter.start(trimmed)
+                        _messages.emit("接力模式：经 ${com.dlguard.relay.RelayState.host} 下载（并发上限 32）")
+                    } else {
+                        _sniffRequest.tryEmit(trimmed)
+                        _messages.emit("接力模式：正在经网关加载页面…")
+                    }
+                } finally {
+                    _resolving.value = false
+                }
+            }
+            return
+        }
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val probe = LinkSniffer.probe(trimmed)
@@ -403,6 +420,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _resolving.value = false
             }
         }
+    }
+
+    /** 接力模式下没有外网可探测，只能按后缀粗判；判错也只是多开一次 WebView。 */
+    private fun looksLikeFileUrl(url: String): Boolean {
+        val path = url.substringBefore('?').substringBefore('#').substringAfterLast('/')
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return ext in setOf(
+            "apk", "apks", "xapk", "apkm", "zip", "7z", "rar", "tar", "gz", "tgz",
+            "pdf", "epub", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+            "mp4", "mkv", "avi", "mov", "webm", "mp3", "flac", "wav", "m4a",
+            "iso", "img", "bin", "exe", "msi", "dmg", "pkg", "torrent"
+        )
     }
 
     /** 暂停某个任务：分片与元数据都保留，继续时从断点接着下。 */

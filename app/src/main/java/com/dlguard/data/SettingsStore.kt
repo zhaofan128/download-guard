@@ -43,6 +43,13 @@ data class GuardSettings(
     val crossAppCapture: Boolean = false,
     /** 首页标题字体：sans（现代无衬线）/ system（跟随系统）/ serif / mono。 */
     val titleFont: String = "sans",
+    /** 接力下载：作为客户端，把下载请求交给附近的网关设备。 */
+    val relayClientEnabled: Boolean = false,
+    /** 网关地址（热点下通常是 192.168.43.1）。 */
+    val relayHost: String = "",
+    val relayPort: Int = 8899,
+    /** 6 位接入码，防止同热点下别人白嫖网关的流量。 */
+    val relayToken: String = "",
     /**
      * 允许点击校验完成的 APK 时直接调起安装。
      * 走 Shizuku 的 pm install，**不申请 REQUEST_INSTALL_PACKAGES**，
@@ -70,6 +77,10 @@ class SettingsStore(private val context: Context) {
         val ALLOW_INSTALLER = booleanPreferencesKey("allow_installer")
         val CROSS_APP_CAPTURE = booleanPreferencesKey("cross_app_capture")
         val TITLE_FONT = stringPreferencesKey("title_font")
+        val RELAY_CLIENT_ENABLED = booleanPreferencesKey("relay_client_enabled")
+        val RELAY_HOST = stringPreferencesKey("relay_host")
+        val RELAY_PORT = intPreferencesKey("relay_port")
+        val RELAY_TOKEN = stringPreferencesKey("relay_token")
     }
 
     val settings: Flow<GuardSettings> = context.guardDataStore.data
@@ -91,6 +102,10 @@ class SettingsStore(private val context: Context) {
                 autoRepairAccessibility = prefs[Keys.AUTO_REPAIR_ACCESSIBILITY] ?: false,
                 crossAppCapture = prefs[Keys.CROSS_APP_CAPTURE] ?: false,
                 titleFont = prefs[Keys.TITLE_FONT] ?: "sans",
+                relayClientEnabled = prefs[Keys.RELAY_CLIENT_ENABLED] ?: false,
+                relayHost = prefs[Keys.RELAY_HOST] ?: "",
+                relayPort = prefs[Keys.RELAY_PORT] ?: 8899,
+                relayToken = prefs[Keys.RELAY_TOKEN] ?: "",
                 allowInstaller = prefs[Keys.ALLOW_INSTALLER] ?: true
             )
         }
@@ -107,6 +122,16 @@ class SettingsStore(private val context: Context) {
     suspend fun setAccessibilityCapture(value: Boolean) = put(Keys.ACCESSIBILITY_CAPTURE, value)
     suspend fun setAutoRepairAccessibility(value: Boolean) = put(Keys.AUTO_REPAIR_ACCESSIBILITY, value)
     suspend fun setCrossAppCapture(value: Boolean) = put(Keys.CROSS_APP_CAPTURE, value)
+
+    suspend fun setRelayClientEnabled(value: Boolean) = put(Keys.RELAY_CLIENT_ENABLED, value)
+
+    suspend fun setRelayTarget(host: String, port: Int, token: String) {
+        context.guardDataStore.edit {
+            it[Keys.RELAY_HOST] = host.trim()
+            it[Keys.RELAY_PORT] = port.coerceIn(1, 65535)
+            it[Keys.RELAY_TOKEN] = token.trim()
+        }
+    }
 
     suspend fun setTitleFont(value: String) {
         val allowed = setOf("sans", "system", "serif", "mono")

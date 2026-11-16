@@ -131,6 +131,13 @@
                 android:value="download_integrity_guard:持续监听公共下载目录，校验新下载的 apk/apks/xapk/zip 安装包完整性" />
         </service>
 
+        <!-- 接力网关：把本机网络借给附近没有网络的设备（热点下的 HTTP 代理） -->
+        <service
+            android:name=".relay.RelayService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <!-- WorkManager 内置前台服务：重新下载大文件时使用 dataSync 类型 -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"

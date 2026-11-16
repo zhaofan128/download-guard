@@ -38,6 +38,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -234,6 +235,17 @@ fun SettingScreen(
                     onCheckedChange = settingViewModel::setDynamicColor
                 )
             }
+        }
+
+        item {
+            RelaySection(
+                settings = settings,
+                onClientEnabled = settingViewModel::setRelayClientEnabled,
+                onSaveTarget = settingViewModel::saveRelayTarget,
+                onGatewayStart = settingViewModel::startRelayGateway,
+                onGatewayStop = settingViewModel::stopRelayGateway,
+                onTest = settingViewModel::testRelay
+            )
         }
 
         item {
@@ -916,6 +928,114 @@ private fun SettingSwitch(
             hapticEnabled = hapticEnabled,
             accentColor = MaterialTheme.colorScheme.primary
         )
+    }
+}
+
+/**
+ * 接力下载：把「有网设备」的连接借给「没网设备」。
+ *
+ * 这里刻意不自动开热点——ColorOS/MIUI 对 LocalOnlyHotspot 的限制各不相同，
+ * 与其做成时灵时不灵，不如让用户手动开系统热点（所有 ROM 都有），
+ * App 只负责代理和展示要输入的地址。
+ */
+@Composable
+private fun RelaySection(
+    settings: com.dlguard.data.GuardSettings,
+    onClientEnabled: (Boolean) -> Unit,
+    onSaveTarget: (String, String, String) -> Unit,
+    onGatewayStart: () -> Unit,
+    onGatewayStop: () -> Unit,
+    onTest: () -> Unit
+) {
+    var host by remember { mutableStateOf(settings.relayHost) }
+    var port by remember { mutableStateOf(settings.relayPort.toString()) }
+    var token by remember { mutableStateOf(settings.relayToken) }
+    val gatewayOn by produceState(initialValue = com.dlguard.relay.RelayState.gatewayRunning) {
+        while (true) {
+            value = com.dlguard.relay.RelayState.gatewayRunning
+            kotlinx.coroutines.delay(1_200)
+        }
+    }
+    val addresses = remember { com.dlguard.relay.RelayServer.companionAddresses() }
+
+    Section("接力下载") {
+        Text(
+            text = "一台有网、一台没网时：没网设备连上有网设备的热点，下载请求经它转发。" +
+                "HTTPS 走隧道，网关看不到内容、不落盘。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            modifier = Modifier.padding(vertical = 8.dp)
+        )
+        SettingSwitch(
+            title = "使用附近设备的网络",
+            subtitle = "开启后所有下载走网关；关闭立即恢复本机直连",
+            checked = settings.relayClientEnabled,
+            hapticEnabled = settings.haptics,
+            onCheckedChange = onClientEnabled
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = host,
+                onValueChange = { host = it },
+                label = { Text("网关地址") },
+                placeholder = { Text("192.168.43.1") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                colors = OutlinedTextFieldDefaults.colors()
+            )
+            OutlinedTextField(
+                value = port,
+                onValueChange = { input -> port = input.filter { it.isDigit() }.take(5) },
+                label = { Text("端口") },
+                singleLine = true,
+                modifier = Modifier.width(92.dp),
+                colors = OutlinedTextFieldDefaults.colors()
+            )
+        }
+        OutlinedTextField(
+            value = token,
+            onValueChange = { input -> token = input.filter { it.isDigit() }.take(6) },
+            label = { Text("接入码") },
+            placeholder = { Text("网关设备上显示的 6 位数字") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            colors = OutlinedTextFieldDefaults.colors()
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            TextButton(onClick = { onSaveTarget(host, port, token) }) { Text("保存") }
+            TextButton(onClick = {
+                onSaveTarget(host, port, token)
+                onTest()
+            }) { Text("测试连接") }
+        }
+        Spacer(Modifier.height(6.dp))
+        SettingSwitch(
+            title = "共享本机网络（网关）",
+            subtitle = "先在系统里打开「个人热点」让对方连上；本页会显示要输入的地址与接入码",
+            checked = gatewayOn,
+            hapticEnabled = settings.haptics,
+            onCheckedChange = { if (it) onGatewayStart() else onGatewayStop() }
+        )
+        if (gatewayOn) {
+            val ip = addresses.firstOrNull() ?: "打开热点后显示"
+            Text(
+                text = "本机地址  $ip:${com.dlguard.relay.RelayState.gatewayPort}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            Text(
+                text = "接入码  ${com.dlguard.relay.RelayState.gatewayToken.ifBlank { token }}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
     }
 }
 

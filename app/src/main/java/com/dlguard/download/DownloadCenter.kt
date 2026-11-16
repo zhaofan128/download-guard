@@ -99,6 +99,9 @@ class DownloadCenter(
     companion object {
         /** ETA 冻结窗口 3 秒：刷新间隔小于它的更新一律沿用旧值。 */
         private const val ETA_FREEZE_MS = 3_000L
+
+        /** 接力模式下的并发上限（见 runTask 注释）。 */
+        private const val RELAY_MAX_CONNECTIONS = 32
     }
 
     private val lock = Any()
@@ -245,8 +248,11 @@ class DownloadCenter(
 
             // 全局熔断：同站点任一任务撞过 403/429，新任务进来先把并发压到安全值
             val cap = if (breakerOn) HostCircuitBreaker.capFor(host!!) else ResumableDownloader.MAX_CONNECTIONS
-            val initial = (settings?.downloadThreads ?: 16)
-                .coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)
+            // 接力模式下所有流量都挤在一条热点链路上，256 连接只会让网关排队到卡死。
+            // 32 条已经能把 2.4G/5G 热点跑满，再高是纯内耗。
+            val ceiling = if (com.dlguard.relay.RelayState.active) RELAY_MAX_CONNECTIONS
+            else ResumableDownloader.MAX_CONNECTIONS
+            val initial = (settings?.downloadThreads ?: 16).coerceIn(1, ceiling)
                 .coerceAtMost(cap)
             val gate = ResumableDownloader.ConnectionGovernor(initial)
             rt.governor = gate
@@ -603,7 +609,9 @@ class DownloadCenter(
     fun setTaskConnections(id: Long, connections: Int) {
         val rt = runtimes[id] ?: return
         rt.userAdjusted = true
-        val n = connections.coerceIn(1, ResumableDownloader.MAX_CONNECTIONS)
+        val ceiling = if (com.dlguard.relay.RelayState.active) RELAY_MAX_CONNECTIONS
+        else ResumableDownloader.MAX_CONNECTIONS
+        val n = connections.coerceIn(1, ceiling)
         rt.governor?.request(n)
         updateTask(id) { t -> if (t.phase == TaskPhase.RUNNING) t.copy(connections = n) else t }
         scope.launch {

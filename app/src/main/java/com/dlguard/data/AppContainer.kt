@@ -6,6 +6,15 @@ import com.dlguard.data.db.AppDatabase
 import com.dlguard.download.DownloadCenter
 import com.dlguard.download.ResumableDownloader
 import com.dlguard.integrity.ApkIntegrityChecker
+import com.dlguard.relay.RelayState
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import java.io.IOException
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.ProxySelector
+import java.net.SocketAddress
+import java.net.URI
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -31,7 +40,9 @@ class AppContainer(private val context: Context) {
     val repository: GuardRepository by lazy {
         GuardRepository(context, database, settings, quarantine)
     }
-    val downloader: ResumableDownloader by lazy { ResumableDownloader(context, checker) }
+    val downloader: ResumableDownloader by lazy {
+        ResumableDownloader(context, checker, relayAwareClient)
+    }
 
     /** 应用级下载中心：Activity 退出后下载继续。 */
     val downloadCenter: DownloadCenter by lazy {
@@ -56,6 +67,54 @@ class AppContainer(private val context: Context) {
                 appScope.launch { settings.setDownloadThreads(threads) }
             }
         )
+    }
+
+    init {
+        // 接力开关要在每个 HTTP 请求的 ProxySelector 里被读到，用 volatile 状态而不是 Flow
+        appScope.launch {
+            runCatching {
+                settings.settings.collect { s ->
+                    RelayState.clientEnabled = s.relayClientEnabled
+                    RelayState.host = s.relayHost
+                    RelayState.port = s.relayPort
+                    RelayState.token = s.relayToken
+                }
+            }
+        }
+    }
+
+    /**
+     * 接力感知的 HTTP 客户端：ProxySelector 每次请求都会读一次 [RelayState]，
+     * 所以开关是即时生效的，不需要重建下载器。
+     *
+     * 认证走 proxyAuthenticator 而不是给每个请求硬塞 header：
+     * 后者在关闭接力后会把接入码原样发给目标网站。
+     */
+    private val relayAwareClient: OkHttpClient by lazy {
+        ResumableDownloader.defaultClient().newBuilder()
+            .proxySelector(object : ProxySelector() {
+                override fun select(uri: URI?): List<Proxy> {
+                    if (!RelayState.active) return listOf(Proxy.NO_PROXY)
+                    return listOf(
+                        Proxy(
+                            Proxy.Type.HTTP,
+                            InetSocketAddress(RelayState.host, RelayState.port)
+                        )
+                    )
+                }
+
+                override fun connectFailed(uri: URI?, sa: SocketAddress?, ioe: IOException?) = Unit
+            })
+            .proxyAuthenticator { _, response ->
+                if (response.code == 407 && RelayState.token.isNotBlank()) {
+                    response.request.newBuilder()
+                        .header("Proxy-Authorization", Credentials.basic("relay", RelayState.token))
+                        .build()
+                } else {
+                    null
+                }
+            }
+            .build()
     }
 
     val lowRamDevice: Boolean by lazy {

@@ -105,10 +105,13 @@ class SniffActivity : ComponentActivity() {
                             val cookie = runCatching {
                                 CookieManager.getInstance().getCookie(referer)
                             }.getOrNull()
+                            // 页面链接已被重写成网关地址，下载前必须还原，否则代理会打到网关自己
+                            val realUrl = com.dlguard.relay.RelayUrls.extractOriginal(url) ?: url
+                            val realReferer = com.dlguard.relay.RelayUrls.extractOriginal(referer) ?: referer
                             (application as? DownloadGuardApp)?.container?.downloadCenter
                                 ?.start(
-                                    url, name,
-                                    referer = referer,
+                                    realUrl, name,
+                                    referer = realReferer,
                                     cookie = cookie,
                                     expectedHash = expectedHash
                                 )
@@ -267,8 +270,10 @@ private fun SniffScreen(
             })
             // 页面点了「下载」：这里拿到的就是浏览器本来要下的地址
             setDownloadListener { url, _, contentDisposition, mimeType, _ ->
-                if (url.startsWith("http://") || url.startsWith("https://")) {
-                    pendingUrl = url
+                // 接力模式：WebView 拿到的是网关的 /file?url=…，要换回原始地址再交给下载器
+                val realUrl = com.dlguard.relay.RelayUrls.extractOriginal(url) ?: url
+                if (realUrl.startsWith("http://") || realUrl.startsWith("https://")) {
+                    pendingUrl = realUrl
                     if (contentDisposition.isNotBlank()) {
                         pendingInfo = LinkSniffer.Probe(
                             finalUrl = url,
@@ -280,7 +285,7 @@ private fun SniffScreen(
                     }
                 }
             }
-            loadUrl(pageUrl)
+            loadUrl(com.dlguard.relay.RelayUrls.browsingUrl(pageUrl))
         }
     }
 
