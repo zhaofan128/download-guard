@@ -13,7 +13,7 @@
 - Kotlin + Coroutines + Jetpack Compose（Material 3）
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
-- **107 个 JVM 单元测试、16 个测试类，本地与 CI 均零跳过**：CI 先构建 Debug 包，APK 验签用例才有真实样本可用（没有样本时它只会被跳过，绿色并不代表验签真的跑过）
+- **114 个 JVM 单元测试、17 个测试类，本地与 CI 均零跳过**：CI 先构建 Debug 包，APK 验签用例才有真实样本可用（没有样本时它只会被跳过，绿色并不代表验签真的跑过）
 - 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、真实 APK 的 v2 签名摘要重算
 
 ## 它做不到什么（先看这里，比看功能列表省时间）
@@ -191,7 +191,7 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 全部单元测试（107 个用例 / 16 个测试类）
+./gradlew :app:testDebugUnitTest      # 全部单元测试（114 个用例 / 17 个测试类）
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -225,7 +225,7 @@ DownloadGuard/
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    107 个 JVM 单元测试（16 个测试类）
+├── app/src/test/    114 个 JVM 单元测试（17 个测试类）
 ├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包，测试数为 0 直接失败
 ├── xposed/          LSPosed 模块（可选，条件编译）
 └── dist/            本地构建产物（不随仓库提交）

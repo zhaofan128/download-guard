@@ -243,19 +243,26 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
 
     // ------------------------------------------------------------ 接力下载
 
-    /** 客户端开关：打开后所有下载走网关，关闭恢复本机直连（下次请求即生效）。 */
+    /**
+     * 客户端开关：打开后所有下载走网关，关闭恢复本机直连（下次请求即生效）。
+     *
+     * 关键：无论开/关都必须把状态写进 DataStore。开关是受控组件（checked 来自 settings），
+     * 过去「地址为空时拒绝写开启」会让 checked 永远停在 false，用户每次点击都被算成
+     * 「开启」→ 再被拒 → 弹「先填地址」，于是关不掉。现在地址为空也允许写入，
+     * 只是给出警告；真正是否走代理由 RelayState.active 决定（host 为空时仍走直连）。
+     */
     fun setRelayClientEnabled(value: Boolean) = hotSwitch("relay_client_$value") {
-        runCatching {
-            val s = settings.value
-            if (value && s.relayHost.isBlank()) {
-                emit("先填写网关地址（网关设备上会显示本机 IP）")
-            } else {
+        val s = settings.value
+        if (com.dlguard.relay.RelayToggle.shouldPersist(value)) {
+            runCatching {
                 container.settings.setRelayClientEnabled(value)
-                emit(
-                    if (value) "接力已开启：下载走 ${s.relayHost}:${s.relayPort}"
-                    else "接力已关闭：恢复本机直连"
-                )
+                emit(com.dlguard.relay.RelayToggle.message(value, s.relayHost, s.relayPort))
+            }.onFailure {
+                // 写盘失败就回滚到相反状态，避免开关视觉与实际不符
+                runCatching { viewModelScope.launch { container.settings.setRelayClientEnabled(!value) } }
             }
+        } else {
+            Result.success(Unit)
         }
     }
 
