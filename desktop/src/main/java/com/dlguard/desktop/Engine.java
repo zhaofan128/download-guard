@@ -382,6 +382,25 @@ public final class Engine {
         }
         if (t.name.isEmpty()) t.name = Util.sanitizeName(Util.nameFromUrl(t.url), "download");
 
+        // 续传前确认远端文件没被替换：大小或 ETag 变了就从头来，别把两个版本拼成一个坏文件
+        if (!t.segs.isEmpty() && t.size > 0) {
+            try {
+                Probe p = probe(t);
+                boolean sizeChanged = p.size > 0 && p.size != t.size;
+                boolean etagChanged = !t.etag.isEmpty() && p.etag != null && !p.etag.isEmpty()
+                        && !t.etag.equals(p.etag);
+                if (sizeChanged || etagChanged) {
+                    t.segs.clear();
+                    t.done = 0;
+                    t.etag = p.etag == null ? "" : p.etag;
+                    t.size = p.size > 0 ? p.size : t.size;
+                    try { Files.deleteIfExists(store.partPath(t)); } catch (IOException ignored) { }
+                }
+            } catch (Exception ignored) {
+                // 探测失败不阻断续传，按本地记录继续；真出问题哈希那一步会暴露
+            }
+        }
+
         Path part = store.partPath(t);
         Files.createDirectories(java.nio.file.Paths.get(t.dir));
         if (t.size > 0 && Files.exists(part) && Files.size(part) != t.size && t.segs.isEmpty()) {
@@ -480,6 +499,11 @@ public final class Engine {
                 c.disconnect();
             }
             if (seg.done < seg.length()) {
+                if (t.size <= 0 && seg.start == 0) {
+                    // 服务器没给长度（chunked / 0 字节），读到 EOF 就是完整的
+                    seg.done = seg.length();
+                    break;
+                }
                 // 连接提前断了：同一段重试，保留已写入的字节
                 if (written == 0 && ++attempt > 4) {
                     throw new IOException("连接反复中断，已重试 " + attempt + " 次");

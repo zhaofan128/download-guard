@@ -19,6 +19,7 @@ public final class Main {
         boolean lan = false;
         boolean openBrowser = true;
         String dir = null;
+        String home = null;
 
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
@@ -36,6 +37,9 @@ public final class Main {
                 case "--dir":
                     if (i + 1 < args.length) dir = args[++i];
                     break;
+                case "--home":
+                    if (i + 1 < args.length) home = args[++i];
+                    break;
                 case "--version":
                     System.out.println("DownloadGuard Desktop " + Engine.VERSION);
                     return;
@@ -49,11 +53,25 @@ public final class Main {
                 default:
                     if (a.startsWith("--port=")) port = parseInt(a.substring(7), 0);
                     else if (a.startsWith("--dir=")) dir = a.substring(6);
+                    else if (a.startsWith("--home=")) home = a.substring(7);
                     break;
             }
         }
 
-        Store store = new Store();
+        Store store = (home == null || home.trim().isEmpty())
+                ? new Store()
+                : new Store(Paths.get(home.trim()));
+        if (!store.lockInstance()) {
+            int running = store.readInstancePort();
+            System.out.println();
+            System.out.println("  已经有一个 DownloadGuard 在运行（数据目录 " + store.baseDir + "）。");
+            if (running > 0) {
+                System.out.println("  直接打开：http://127.0.0.1:" + running + "/");
+                if (openBrowser) Util.browse("http://127.0.0.1:" + running + "/");
+            }
+            System.out.println("  要开第二个实例，请加 --home 指定不同的数据目录。");
+            return;
+        }
         Engine engine = new Engine(store);
         if (dir != null && !dir.trim().isEmpty()) {
             engine.settings.saveDir = dir.trim();
@@ -70,6 +88,7 @@ public final class Main {
             return;
         }
         engine.serverPort = server.port();
+        store.writeInstancePort(server.port());
         engine.start();
         server.start();
 
@@ -117,6 +136,7 @@ public final class Main {
         lines.add("  --lan             允许同一局域网的手机/平板访问（带访问令牌）");
         lines.add("  --no-browser      启动后不自动打开浏览器");
         lines.add("  --dir <目录>      默认保存目录");
+        lines.add("  --home <目录>     数据目录（任务与断点），默认 ~/.dlguard-desktop");
         lines.add("  --selftest        跑内置自检（CI 用），失败返回非 0");
         lines.add("  --version         打印版本");
         lines.add("  --help            显示帮助");

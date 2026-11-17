@@ -91,6 +91,8 @@ java -jar DownloadGuard-Desktop-3.0.0.jar [选项]
   --lan             允许局域网设备访问（带随机令牌）
   --no-browser      启动后不打开浏览器
   --dir <目录>      默认保存目录
+  --home <目录>     数据目录（任务、断点、设置），默认 ~/.dlguard-desktop
+  --selftest        跑内置自检（22 项），失败返回非 0
   --version         打印版本
   --help            显示帮助
 ```
@@ -153,6 +155,9 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --port 9000 --no-browser --dir /data/d
 ```bash
 xattr -d com.apple.quarantine DownloadGuard-Desktop-3.0.0.jar
 ```
+
+**双击了两次，第二次一闪而过**
+桌面版有单实例锁：检测到已有一个进程占着数据目录，会打印正在运行的地址并退出，避免两个进程同时写断点。要并行跑两个实例，给第二个加 `--home` 指向不同目录。
 
 **界面是旧样子**
 HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift + R`。

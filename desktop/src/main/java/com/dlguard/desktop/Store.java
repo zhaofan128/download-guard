@@ -1,8 +1,11 @@
 package com.dlguard.desktop;
 
 import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -22,6 +25,10 @@ public final class Store {
     public final Path quarantineDir;
     private final Path tasksFile;
     private final Path settingsFile;
+    private final Path lockFile;
+    private final Path infoFile;
+    private FileChannel lockChannel;
+    private FileLock lock;
 
     public Store() {
         this(Paths.get(System.getProperty("user.home", "."), ".dlguard-desktop"));
@@ -33,10 +40,45 @@ public final class Store {
         this.quarantineDir = baseDir.resolve("quarantine");
         this.tasksFile = baseDir.resolve("tasks.json");
         this.settingsFile = baseDir.resolve("settings.json");
+        this.lockFile = baseDir.resolve("instance.lock");
+        this.infoFile = baseDir.resolve("instance.port");
         try {
             Files.createDirectories(partsDir);
             Files.createDirectories(quarantineDir);
         } catch (IOException ignored) { }
+    }
+
+    /**
+     * 单实例锁：两个进程同时写 tasks.json 会把断点写乱，也会重复下载同一文件。
+     * 文件系统不支持锁时放行，不因为锁的问题让用户打不开。
+     */
+    public boolean lockInstance() {
+        try {
+            lockChannel = FileChannel.open(lockFile,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+            lock = lockChannel.tryLock();
+            return lock != null;
+        } catch (Exception e) {
+            return true;
+        }
+    }
+
+    public void writeInstancePort(int port) {
+        try {
+            // 注意：不能写 lockFile —— 原子替换会换掉 inode，锁就失效了
+            Util.atomicWrite(infoFile, ("port=" + port + "\npid=" + ProcessHandle.current().pid() + "\n")
+                    .getBytes(StandardCharsets.UTF_8));
+        } catch (Exception ignored) { }
+    }
+
+    public int readInstancePort() {
+        String text = Util.readText(infoFile, "");
+        for (String line : text.split("\n")) {
+            if (line.startsWith("port=")) {
+                try { return Integer.parseInt(line.substring(5).trim()); } catch (NumberFormatException ignored) { }
+            }
+        }
+        return 0;
     }
 
     public Path partPath(Task t) {
