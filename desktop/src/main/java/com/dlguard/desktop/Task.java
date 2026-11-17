@@ -37,6 +37,10 @@ public final class Task {
     public String warning = "";            // 未验证 / 已跳过等需要显式提示的信息
     public String gid = "";                // BT 任务在 aria2 里的 id
     public boolean resumeOnStart = false;  // 上次退出时是否正在下载（用于开机自动续传）
+    public String referer = "";            // 来源页（网盘直链必须带，否则 403）
+    public String userAgent = "";          // 空则用全局设置
+    public String source = "manual";       // manual | browser | accessibility | download-manager | relay
+    public transient String cookie = "";   // 只存内存：Cookie 落盘等于把登录态写进 tasks.json
     public transient boolean nameAuto = false;  // 名字是从 URL 猜的，允许被 Content-Disposition 覆盖
     public List<Seg> segs = new ArrayList<>();
 
@@ -110,6 +114,11 @@ public final class Task {
         m.put("gid", gid);
         m.put("resumeOnStart", resumeOnStart
                 || "downloading".equals(status) || "queued".equals(status) || "verifying".equals(status));
+        m.put("referer", referer);
+        m.put("userAgent", userAgent);
+        m.put("source", source);
+        // cookie 故意不序列化：它等价于登录态，写进 tasks.json 就是明文落盘
+        m.put("hasCookie", cookie != null && !cookie.isEmpty());
         m.put("segments", segsToMaps());
         return m;
     }
@@ -151,6 +160,9 @@ public final class Task {
         t.warning = Json.str(m, "warning", "");
         t.gid = Json.str(m, "gid", "");
         t.resumeOnStart = Json.bool(m, "resumeOnStart", false);
+        t.referer = Json.str(m, "referer", "");
+        t.userAgent = Json.str(m, "userAgent", "");
+        t.source = Json.str(m, "source", "manual");
         for (Object o : Json.list(m.get("segments"))) {
             Map<String, Object> sm = Json.map(o);
             t.segs.add(new Seg(Json.num(sm, "start", 0), Json.num(sm, "end", 0), Json.num(sm, "done", 0)));

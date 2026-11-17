@@ -244,6 +244,24 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * 自动接收：浏览器/网盘里点下载就直接建任务。
+     *
+     * 这是唯一会「不点确认就开始耗流量」的开关，所以默认关闭，打开时把后果讲清楚：
+     * 系统下载器那份不会自动取消，用户会在通知栏看到两个下载。
+     */
+    fun setAutoIntake(value: Boolean) = hotSwitch("auto_intake") {
+        runCatching {
+            container.settings.setAutoIntake(value)
+            emit(
+                if (value) "已开启自动接收：网盘里点下载会直接进这里的队列"
+                else "已关闭自动接收：捕获的链接只进候选列表，由你确认后再下"
+            )
+        }.onFailure {
+            runCatching { viewModelScope.launch { container.settings.setAutoIntake(!value) } }
+        }
+    }
+
     /** 首页标题字体：即时生效（HomeScreen 直接订阅 settings）。 */
     fun setTitleFont(value: String) = hotSwitch("title_font_$value") {
         runCatching { container.settings.setTitleFont(value) }

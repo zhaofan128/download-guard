@@ -28,6 +28,12 @@ public final class Settings {
     public boolean hlsRemux = true;     // HLS 下完尝试用 ffmpeg 合成 mp4
     public String aria2Path = "";       // 留空则自动在 PATH 里找
 
+    // ---- 浏览器接管（扩展 ↔ 本机回环桥）----
+    public boolean hookEnabled = true;   // 总开关：关掉后 /api/hook 一律拒绝
+    public String hookToken = "";        // 扩展配对后拿到的专用令牌（不能暂停/删除/改设置）
+    public String hookPairCode = "";     // 8 位数字，用户在扩展里填一次；重置后旧令牌失效
+    public String hookLastSource = "";   // 最近一次投递来源，仅用于界面展示
+
     public static String defaultSaveDir() {
         String home = System.getProperty("user.home", ".");
         Path downloads = Paths.get(home, "Downloads");
@@ -51,8 +57,19 @@ public final class Settings {
                 "verifyApk", verifyApk,
                 "quarantineOnMismatch", quarantineOnMismatch,
                 "hlsRemux", hlsRemux,
-                "aria2Path", aria2Path
+                "aria2Path", aria2Path,
+                "hookEnabled", hookEnabled,
+                // 配对码与令牌都不回传给浏览器端设置页：能读设置的人不该顺手拿到它
+                "hookPaired", hookToken != null && !hookToken.isEmpty()
         );
+    }
+
+    /** 落盘用：多出配对令牌与配对码，这两个字段不进 /api/state 的响应。 */
+    public Map<String, Object> toDiskMap() {
+        Map<String, Object> m = toMap();
+        m.put("hookToken", hookToken);
+        m.put("hookPairCode", hookPairCode);
+        return m;
     }
 
     public static Settings fromMap(Map<String, Object> m) {
@@ -76,6 +93,9 @@ public final class Settings {
         s.quarantineOnMismatch = Json.bool(m, "quarantineOnMismatch", s.quarantineOnMismatch);
         s.hlsRemux = Json.bool(m, "hlsRemux", s.hlsRemux);
         s.aria2Path = Json.str(m, "aria2Path", s.aria2Path);
+        s.hookEnabled = Json.bool(m, "hookEnabled", s.hookEnabled);
+        s.hookToken = Json.str(m, "hookToken", "");
+        s.hookPairCode = Json.str(m, "hookPairCode", "");
         return s;
     }
 

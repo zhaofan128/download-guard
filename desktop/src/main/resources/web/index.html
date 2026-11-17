@@ -244,6 +244,31 @@
           </div>
 
           <div class="card">
+            <div class="card-head"><h2>浏览器接管</h2><p>网盘里点下载，直接进这里</p></div>
+            <label class="switch-row">
+              <span><b>启用浏览器接管</b><small>关闭后扩展投递的请求一律拒绝，扩展会退回浏览器下载</small></span>
+              <input type="checkbox" id="setHookEnabled" class="switch">
+            </label>
+            <div class="field">
+              <span>配对码</span>
+              <div class="input-row">
+                <input id="hookPairCode" type="text" readonly spellcheck="false" placeholder="—">
+                <button class="ghost-btn" id="copyPairCode">复制</button>
+              </div>
+              <div class="inline-note" id="hookPairNote">—</div>
+            </div>
+            <div class="card-actions">
+              <button class="ghost-btn" id="downloadExtension">下载浏览器扩展</button>
+              <button class="ghost-btn" id="resetPair">重置配对</button>
+            </div>
+            <div class="inline-note">
+              解压后在 Chrome / Edge 打开 <code>chrome://extensions</code>，开启「开发者模式」，
+              点「加载已解压的扩展程序」选解压出来的文件夹，再点扩展图标填入上面的配对码。
+              网盘里点下载时，扩展会把链接连同 Referer 与登录 Cookie 一起交给这里。
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-head"><h2>校验</h2><p>下完先验，再交给系统打开</p></div>
             <label class="switch-row">
               <span><b>APK / ZIP 结构检查</b><small>遍历压缩包条目核对 CRC，并识别 v1/v2/v3 签名</small></span>

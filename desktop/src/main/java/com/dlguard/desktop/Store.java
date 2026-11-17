@@ -159,7 +159,7 @@ public final class Store {
 
     public synchronized void saveSettings(Settings s) {
         try {
-            Util.atomicWrite(settingsFile, Json.write(s.toMap()).getBytes(StandardCharsets.UTF_8));
+            Util.atomicWrite(settingsFile, Json.write(s.toDiskMap()).getBytes(StandardCharsets.UTF_8));
         } catch (IOException ignored) { }
     }
 }

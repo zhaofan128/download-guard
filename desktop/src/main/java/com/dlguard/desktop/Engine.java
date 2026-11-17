@@ -39,7 +39,7 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.1.1";
+    public static final String VERSION = "3.2.0";
 
     /**
      * 单个分段允许的最大重连次数。
@@ -352,7 +352,31 @@ public final class Engine {
     // ------------------------------------------------------------------ 任务操作
 
     public Task add(String url, String dir, int conn, String expectedSha) {
+        return add(url, dir, conn, expectedSha, null);
+    }
+
+    /**
+     * 投递来源附带的请求上下文。
+     *
+     * 网盘直链不是「有个 URL 就能下」：它通常校验 Referer、要求带登录 Cookie，
+     * 有的还按 UA 区分客户端。缺任何一个都会拿到 403 或一个 200 的登录页 HTML。
+     * Cookie 只在内存里传给请求头，不写进 tasks.json。
+     */
+    public static final class Intake {
+        public String referer = "";
+        public String cookie = "";
+        public String userAgent = "";
+        public String fileName = "";
+        public String source = "manual";
+        public long size = 0;
+    }
+
+    public Task add(String url, String dir, int conn, String expectedSha, Intake intake) {
         String u = url == null ? "" : url.trim();
+        String lower = u.toLowerCase(Locale.ROOT);
+        if (!(lower.startsWith("http://") || lower.startsWith("https://") || lower.startsWith("magnet:"))) {
+            throw new IllegalArgumentException("只接受 http/https/magnet 链接");
+        }
         Task t = new Task();
         t.url = u;
         try {
@@ -363,16 +387,33 @@ public final class Engine {
         }
         t.connections = conn > 0 ? Math.min(32, conn) : settings.connections;
         t.expectedSha256 = expectedSha == null ? "" : expectedSha.trim().toLowerCase(Locale.ROOT);
-        t.kind = u.startsWith("magnet:") ? "BT" : (u.toLowerCase(Locale.ROOT).contains(".m3u8") ? "HLS" : "HTTP");
+        t.kind = u.startsWith("magnet:") ? "BT" : (lower.contains(".m3u8") ? "HLS" : "HTTP");
         t.name = u.startsWith("magnet:") ? Torrent.displayName(u) : Util.nameFromUrl(u);
         t.nameAuto = !u.startsWith("magnet:");
         t.status = "queued";
+        if (intake != null) {
+            t.referer = safeHeader(intake.referer);
+            t.cookie = safeHeader(intake.cookie);
+            t.userAgent = safeHeader(intake.userAgent);
+            t.source = intake.source == null || intake.source.isEmpty() ? "manual" : intake.source;
+            if (intake.fileName != null && !intake.fileName.trim().isEmpty()) {
+                t.name = Util.sanitizeName(intake.fileName.trim(), Util.nameFromUrl(u));
+                t.nameAuto = false;
+            }
+            if (intake.size > 0) t.size = intake.size;
+        }
         tasks.add(t);
         index.put(t.id, t);
         persist(true);
         startQueued();
         fire();
         return t;
+    }
+
+    /** 请求头里不允许出现换行：否则一个「文件名」就能注入额外的头。 */
+    private static String safeHeader(String v) {
+        if (v == null) return "";
+        return v.replace("\r", "").replace("\n", "").trim();
     }
 
     /** .torrent 文件：解析出名字，交给 aria2 或内置种子引擎。 */
@@ -761,7 +802,7 @@ public final class Engine {
             while (true) {
                 if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
                 String range = written > 0 && t.rangeSupported ? "bytes=" + written + "-" : null;
-                HttpURLConnection c = open(t.url, range);
+                HttpURLConnection c = open(t, t.url, range);
                 int code = c.getResponseCode();
                 if (code == 206) {
                     // 正常续传，但要核对起点：服务器回 206 却从 0 开始，等于把前半段又写一遍
@@ -845,7 +886,7 @@ public final class Engine {
             if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
             long from = seg.start + seg.done;
             long to = seg.end;
-            HttpURLConnection c = open(t.url, "bytes=" + from + "-" + to);
+            HttpURLConnection c = open(t, t.url, "bytes=" + from + "-" + to);
             int code = c.getResponseCode();
             if (code == 416) {
                 c.disconnect();
@@ -960,7 +1001,12 @@ public final class Engine {
         return null;
     }
 
+    /** 不带任务上下文的请求（HLS 的播放列表探测等），沿用全局请求头。 */
     HttpURLConnection open(String url, String range) throws IOException {
+        return open(null, url, range);
+    }
+
+    HttpURLConnection open(Task t, String url, String range) throws IOException {
         URL u = new URL(url);
         HttpURLConnection c;
         if (!settings.proxy.isEmpty()) {
@@ -977,17 +1023,26 @@ public final class Engine {
         c.setInstanceFollowRedirects(true);
         c.setConnectTimeout(15000);
         c.setReadTimeout(30000);
-        c.setRequestProperty("User-Agent", settings.userAgent);
+        // 任务级请求头优先：网盘直链认 Referer 和 Cookie，全局 UA 只够下公开文件。
+        // 这三个字段来自「浏览器接管」的载荷，缺一个都会拿到 403 或登录页。
+        String ua = t != null && t.userAgent != null && !t.userAgent.isEmpty()
+                ? t.userAgent : settings.userAgent;
+        String ref = t != null && t.referer != null && !t.referer.isEmpty()
+                ? t.referer : settings.referer;
+        c.setRequestProperty("User-Agent", ua);
         c.setRequestProperty("Accept", "*/*");
         c.setRequestProperty("Accept-Encoding", "identity");
-        if (!settings.referer.isEmpty()) c.setRequestProperty("Referer", settings.referer);
+        if (!ref.isEmpty()) c.setRequestProperty("Referer", ref);
+        if (t != null && t.cookie != null && !t.cookie.isEmpty()) {
+            c.setRequestProperty("Cookie", t.cookie);
+        }
         if (range != null) c.setRequestProperty("Range", range);
         return c;
     }
 
     private Probe probe(Task t) throws IOException {
         Probe p = new Probe();
-        HttpURLConnection c = open(t.url, "bytes=0-0");
+        HttpURLConnection c = open(t, t.url, "bytes=0-0");
         int code = c.getResponseCode();
         if (code == 200 || code == 206) {
             String cr = c.getHeaderField("Content-Range");
@@ -1012,7 +1067,7 @@ public final class Engine {
         c.disconnect();
         if (code == 405 || code == 501) {
             // 少数服务器不支持 Range，退回普通 GET 探测
-            HttpURLConnection g = open(t.url, null);
+            HttpURLConnection g = open(t, t.url, null);
             int gc = g.getResponseCode();
             if (gc != 200) {
                 g.disconnect();

@@ -25,11 +25,12 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-JAR = os.path.join(ROOT, "dist", "DownloadGuard-Desktop-3.1.1.jar")
+JAR = os.path.join(ROOT, "dist", "DownloadGuard-Desktop-3.2.0.jar")
 SIZE = 24 * 1024 * 1024  # 24 MB，够跨多个 8 MB 边界，又不至于让 CI 太慢
 
 ok_count = 0
@@ -102,6 +103,22 @@ class RangeHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *a):
         pass
+
+
+class GatedHandler(RangeHandler):
+    """只放行带指定 Referer + Cookie 的请求：用来证明任务级请求头真的注入了。"""
+
+    need_referer = "https://pan.example.com/s/abc"
+    need_cookie = "session=xyz"
+
+    def do_GET(self):
+        if self.headers.get("Referer") != self.need_referer:
+            self.send_error(403, "bad referer")
+            return
+        if self.need_cookie not in (self.headers.get("Cookie") or ""):
+            self.send_error(403, "no cookie")
+            return
+        super().do_GET()
 
 
 class NoRangeHandler(RangeHandler):
@@ -974,6 +991,140 @@ def signing_block_start(b):
     return start
 
 
+def hook_request(port, path, body=None, hook_token="", origin="chrome-extension://dge2etest"):
+    """模拟浏览器扩展：带 Origin（扩展协议）与可选投递令牌。"""
+    data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json", "Origin": origin}
+    if hook_token:
+        headers["X-DG-Hook-Token"] = hook_token
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data,
+                                 method="POST" if data is not None else "GET", headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return resp.status, json.load(resp), dict(resp.headers)
+
+
+def scenario_hook(tmp, payload):
+    """浏览器接管：配对、来源门、请求头注入、去重。"""
+    print("\n[13] 浏览器接管（扩展投递）")
+    port = free_port()
+    save = os.path.join(tmp, "hook-out")
+    home = os.path.join(tmp, "hook-home")
+    os.makedirs(save, exist_ok=True)
+    os.makedirs(home, exist_ok=True)
+
+    GatedHandler.payload = payload[:1024 * 1024]  # 1MB 够验证，不拖慢 CI
+    GatedHandler.filename = "gated.bin"
+    gated_port = free_port()
+
+    c = Client(port, home, save)
+    with Server(GatedHandler, gated_port):
+        c.start()
+        try:
+            info = c.req("/api/hook/info")
+            check("拿到 8 位配对码", bool(re.fullmatch(r"\d{8}", info.get("pairCode", ""))), info)
+            check("初始未配对", info.get("paired") is False)
+
+            # 预检：扩展来源放行，网页来源拒绝
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{c.port}/api/hook", method="OPTIONS",
+                headers={"Origin": "chrome-extension://dge2etest",
+                         "Access-Control-Request-Method": "POST",
+                         "Access-Control-Request-Headers": "content-type,x-dg-hook-token"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                pre = resp.status
+                acao = resp.headers.get("Access-Control-Allow-Origin", "")
+                acah = resp.headers.get("Access-Control-Allow-Headers", "")
+            check("扩展预检 204", pre == 204, pre)
+            check("预检回放行 Origin", acao == "chrome-extension://dge2etest", acao)
+            check("预检允许投递头", "X-DG-Hook-Token" in acah, acah)
+
+            try:
+                hook_request(c.port, "/api/hook", {"url": "http://x/"}, origin="https://evil.example")
+                web_ok = True
+            except urllib.error.HTTPError as e:
+                web_ok = e.code == 403
+            check("网页来源预检/投递被拒", web_ok)
+
+            # 错误配对码必须失败
+            try:
+                hook_request(c.port, "/api/hook/pair", {"code": "00000000"})
+                bad_pair = False
+            except urllib.error.HTTPError as e:
+                bad_pair = e.code in (403, 429)
+            check("错误配对码被拒", bad_pair)
+
+            _, pair, _ = hook_request(c.port, "/api/hook/pair", {"code": info["pairCode"]})
+            hook_token = pair.get("token", "")
+            check("配对成功拿到令牌", len(hook_token) > 20)
+
+            # 无令牌 / 网页来源投递
+            try:
+                hook_request(c.port, "/api/hook", {"url": f"http://127.0.0.1:{gated_port}/x.bin"})
+                no_token = False
+            except urllib.error.HTTPError as e:
+                no_token = e.code == 403
+            check("无投递令牌被拒", no_token)
+
+            try:
+                hook_request(c.port, "/api/hook",
+                             {"url": f"http://127.0.0.1:{gated_port}/x.bin"},
+                             hook_token=hook_token, origin="https://evil.example")
+                evil = False
+            except urllib.error.HTTPError as e:
+                evil = e.code == 403
+            check("网页来源带令牌也被拒", evil)
+
+            # 正常投递：带 Referer + Cookie，服务器才给文件
+            gated_url = f"http://127.0.0.1:{gated_port}/gated.bin"
+            _, r, _ = hook_request(c.port, "/api/hook", {
+                "url": gated_url, "fileName": "gated.bin",
+                "referer": GatedHandler.need_referer,
+                "cookie": GatedHandler.need_cookie,
+                "source": "browser",
+            }, hook_token=hook_token)
+            check("投递成功返回任务 id", bool(r.get("id")), r)
+            t = c.wait_done(r["id"], timeout=60)
+            check("带 Referer+Cookie 下载完成", t and t["status"] == "completed", t and t.get("error"))
+            got = os.path.join(save, "gated.bin")
+            ok_bytes = os.path.exists(got) and open(got, "rb").read() == payload[:1024 * 1024]
+            check("文件字节与源一致", ok_bytes)
+            check("任务标记来源 browser", t and t.get("source") == "browser", t and t.get("source"))
+            check("任务记录了 Referer", t and t.get("referer") == GatedHandler.need_referer)
+            check("任务标记已带 Cookie", t and t.get("hasCookie") is True)
+
+            # 同一链接立刻再投：去重，不重复建任务
+            _, dup, _ = hook_request(c.port, "/api/hook", {"url": gated_url, "fileName": "gated.bin"},
+                                     hook_token=hook_token)
+            check("5 秒内重复投递被去重", dup.get("duplicate") is True and dup.get("id") == r["id"], dup)
+
+            # 不带请求头：服务器 403，任务必须是 error 而不是 completed
+            _, bad, _ = hook_request(c.port, "/api/hook", {
+                "url": f"http://127.0.0.1:{gated_port}/no-header.bin", "fileName": "no-header.bin",
+            }, hook_token=hook_token)
+            t2 = c.wait_done(bad["id"], timeout=60)
+            check("缺请求头必须失败", t2 and t2["status"] == "error", t2 and t2["status"])
+            check("失败原因是 403", t2 and "403" in (t2.get("error") or ""), t2 and t2.get("error"))
+            check("失败任务没有产出文件", not os.path.exists(os.path.join(save, "no-header.bin")))
+
+            # 非 http 协议被拒
+            try:
+                hook_request(c.port, "/api/hook", {"url": "file:///etc/passwd"}, hook_token=hook_token)
+                proto = False
+            except urllib.error.HTTPError as e:
+                proto = e.code == 400
+            check("file:// 投递被拒", proto)
+
+            # 内置扩展包可下载
+            req = urllib.request.Request(f"http://127.0.0.1:{c.port}/api/hook/extension.zip",
+                                         headers={"Cookie": f"dg_token={c.token}"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                blob = resp.read()
+            check("扩展包可下载", blob[:2] == b"PK", len(blob))
+            check("扩展包里有 manifest.json", b"manifest.json" in blob)
+        finally:
+            c.kill()
+
+
 def main():
     global JAR
     if len(sys.argv) > 1:
@@ -997,6 +1148,7 @@ def main():
         scenario_queue(tmp, payload)
         scenario_sse_flood(tmp)
         scenario_apk(tmp)
+        scenario_hook(tmp, payload)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

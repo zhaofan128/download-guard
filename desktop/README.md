@@ -8,7 +8,7 @@
 - 手机、平板连同一个 WiFi 就能打开同一套界面（`--lan`），**一份 UI 同时适配电脑和手机**；
 - 升级只换一个 jar，不用卸载重装。
 
-桌面版 3.1.1 与 Android 3.1.1 同版本号，功能对等但不共享代码：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
+桌面版 3.2.0 与 Android 3.2.0 同版本号，功能对等但不共享代码：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
 
 ---
 
@@ -36,7 +36,7 @@ java -version
 | Windows | 双击 `start-windows.bat` |
 | macOS | 双击 `start-macos.command`（首次可能要在「系统设置 → 隐私与安全性」里放行） |
 | Linux | 双击或在终端执行 `./start-linux.sh` |
-| 任何系统 | `java -jar DownloadGuard-Desktop-3.1.1.jar` |
+| 任何系统 | `java -jar DownloadGuard-Desktop-3.2.0.jar` |
 
 启动后会自动打开浏览器。**首次必须用终端打印的完整链接（带 `?token=…`）打开**：服务端会种一个 HttpOnly、SameSite=Strict 的会话 Cookie，然后 302 到干净地址；没有令牌直接访问 `http://127.0.0.1:8765/` 会得到 403。令牌每次启动重新生成，Cookie 保留 30 天。
 
@@ -45,7 +45,7 @@ java -version
 ### 手机 / 平板访问
 
 ```bash
-java -jar DownloadGuard-Desktop-3.1.1.jar --lan
+java -jar DownloadGuard-Desktop-3.2.0.jar --lan
 ```
 
 终端会打印一行带令牌的地址，例如：
@@ -87,8 +87,29 @@ Android 8.0+ 装 APK；能开浏览器的设备（包括 Kindle Fire、智能电
 | BT / 磁力 | 通过本机 `aria2c` 的 JSON-RPC 托管：磁力、`.torrent` 都支持，进度/速度/做种状态映射回任务列表。没装 aria2 时给一句能照做的安装提示，不假装支持 |
 | 下载后校验 | 流式计算 SHA-256 + MD5；填了期望 SHA-256 就严格比对，不符自动移到 `quarantine/` |
 | APK v2 验签 | 遍历 ZIP 条目核对 CRC；定位 APK Signing Block，解析 v2 signers，按规范重算 1MB 分块内容摘要，用证书公钥验签并核对证书与 signer 公钥。结果分 `verified` / `failed` / `unsupported`，**v1-only 与 v3-only 明确标「未验证」**；失败文件移隔离区。另有证书 SHA-256 指纹与主题供对照 |
+| 浏览器接管 | 内置 Chrome/Edge 扩展（zip 已打进 jar，设置页一键下载）。网盘网页点下载时取消浏览器下载，把 URL + **Referer + 登录 Cookie + UA** 投递到本机，由这里分段下载。扩展只处理「浏览器自己要下的那个文件」，不做嗅探、不读页面；投递失败归还浏览器，该站点冷却 5 分钟 |
 | 失败说人话 | 403 提示防盗链与 Referer，404 提示文件没了，429 提示降连接数，证书错误单独提示；不再只甩一个 `HttpStatusException` |
 | 自适应界面 | 320px 手机到 4K 桌面：桌面左侧栏、平板图标栏、手机底部标签栏 + FAB；触控目标 ≥ 38px；支持深/浅色与减少动效 |
+
+### 浏览器接管（3.2.0）
+
+网盘直链不是「有个 URL 就能下」：它靠 Cookie 认人、靠 Referer 防盗链、几分钟就过期。这三样只有浏览器在「点下载」的那一刻同时拿得到，所以接管必须在浏览器侧做。
+
+1. 设置 → 浏览器接管，记下 8 位配对码，点「下载浏览器扩展」；
+2. 解压到固定目录，`chrome://extensions` 开开发者模式 → 加载已解压的扩展程序；
+3. 点扩展图标填配对码。
+
+之后在夸克/百度/阿里云盘网页里点下载，浏览器那个下载会被取消，任务直接出现在这里。任务详情会显示「来源：browser」与「已带登录 Cookie」（只显示有没有，不显示内容）。
+
+投递协议（本机回环，端口 37650–37659）：
+
+```
+GET  /api/hook/ping   → { app:"dlguard", api:1, paired, needPair }
+POST /api/hook/pair   → { code:"12345678" } → { ok, token }
+POST /api/hook        → X-DG-Hook-Token + { url, fileName, size, referer, cookie, userAgent }
+```
+
+安全边界：只对这三个路径放开扩展来源（`Origin: chrome-extension://…`），其它路径仍然严格同源；投递令牌只能建任务，不能暂停/删除/改设置；Cookie 只进内存请求头，不落盘；配对失败与令牌失败共用同一套限流。
 
 ### 做不到什么
 
@@ -104,7 +125,7 @@ Android 8.0+ 装 APK；能开浏览器的设备（包括 Kindle Fire、智能电
 ## 三、命令行参数
 
 ```
-java -jar DownloadGuard-Desktop-3.1.1.jar [选项]
+java -jar DownloadGuard-Desktop-3.2.0.jar [选项]
 
   --port <端口>     指定端口，默认 8765（被占用会自动顺延）
   --lan             允许局域网设备访问（带随机令牌）
@@ -128,7 +149,7 @@ java -jar DownloadGuard-Desktop-3.1.1.jar [选项]
 例：给下载机用，不弹浏览器、限 9000 端口：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.1.1.jar --port 9000 --no-browser --dir /data/downloads
+java -jar DownloadGuard-Desktop-3.2.0.jar --port 9000 --no-browser --dir /data/downloads
 ```
 
 ### 用命令行投递（不点界面）
@@ -137,13 +158,13 @@ java -jar DownloadGuard-Desktop-3.1.1.jar --port 9000 --no-browser --dir /data/d
 
 ```bash
 # 投一个任务并等它下完；失败返回非 0，脚本里能直接判断
-java -jar DownloadGuard-Desktop-3.1.1.jar --add https://example.com/big.iso --wait
+java -jar DownloadGuard-Desktop-3.2.0.jar --add https://example.com/big.iso --wait
 
 # 看队列（状态、进度、速度、文件名）
-java -jar DownloadGuard-Desktop-3.1.1.jar --status
+java -jar DownloadGuard-Desktop-3.2.0.jar --status
 
 # 带官方哈希投递，下完自动比对
-java -jar DownloadGuard-Desktop-3.1.1.jar --add https://example.com/a.apk \
+java -jar DownloadGuard-Desktop-3.2.0.jar --add https://example.com/a.apk \
   --sha256 9f2c... --connections 16 --wait --quiet
 ```
 
@@ -200,7 +221,7 @@ java -jar DownloadGuard-Desktop-3.1.1.jar --add https://example.com/a.apk \
 **macOS 提示「无法验证开发者」**
 
 ```bash
-xattr -d com.apple.quarantine DownloadGuard-Desktop-3.1.1.jar
+xattr -d com.apple.quarantine DownloadGuard-Desktop-3.2.0.jar
 ```
 
 **双击了两次，第二次一闪而过**
@@ -215,8 +236,8 @@ HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift
 
 ```bash
 ./build.sh                                   # 编译
-java -Ddg.apk=test/fixtures/signed.apk -jar ../dist/DownloadGuard-Desktop-3.1.1.jar --selftest   # 54 项自检，含真实 APK 验签
-python3 test/e2e.py                          # 76 项端到端检查（起真服务器、真下载、真杀进程）
+java -Ddg.apk=test/fixtures/signed.apk -jar ../dist/DownloadGuard-Desktop-3.2.0.jar --selftest   # 54 项自检，含真实 APK 验签
+python3 test/e2e.py                          # 99 项端到端检查（起真服务器、真下载、真杀进程）
 ```
 
 `test/e2e.py` 覆盖的是单测够不着的那类问题：

@@ -174,6 +174,14 @@ fun SettingScreen(
                     onCheckedChange = settingViewModel::setCrossAppCapture
                 )
                 SettingSwitch(
+                    title = "自动接收网盘下载",
+                    subtitle = "浏览器或网盘 App 里点下载时直接建任务（需要 LSPosed 模块）；" +
+                        "系统下载器那份不会自动取消，介意的话保持关闭，用候选列表手动确认",
+                    checked = settings.autoIntake,
+                    hapticEnabled = settings.haptics,
+                    onCheckedChange = settingViewModel::setAutoIntake
+                )
+                SettingSwitch(
                     title = "无障碍心跳保活",
                     subtitle = "每 20 秒检测无障碍状态，被系统杀掉后自动写回开启（需 Shizuku）",
                     checked = settings.autoRepairAccessibility,

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DownloadGuard</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot" id="dot"></span>
+      <strong>DownloadGuard</strong>
+    </div>
+    <span class="state" id="state">检测中…</span>
+  </header>
+
+  <section id="pairBox" class="pair hidden">
+    <p>首次使用需要配对。在 DownloadGuard 设置页找到 8 位配对码：</p>
+    <div class="row">
+      <input id="code" inputmode="numeric" maxlength="8" placeholder="8 位数字" autocomplete="off">
+      <button id="pairBtn">配对</button>
+    </div>
+    <p class="hint" id="pairHint"></p>
+  </section>
+
+  <section class="switches">
+    <label class="switch">
+      <input type="checkbox" id="enabled">
+      <span>启用扩展</span>
+    </label>
+    <label class="switch">
+      <input type="checkbox" id="hijack">
+      <span>接管浏览器下载</span>
+    </label>
+  </section>
+
+  <section class="recent">
+    <h4>最近投递</h4>
+    <ul id="list"><li class="empty">还没有记录</li></ul>
+  </section>
+
+  <section class="cool hidden" id="coolBox">
+    <h4>正在冷却的站点</h4>
+    <ul id="coolList"></ul>
+  </section>
+
+  <footer>
+    只与本机 127.0.0.1 通信，不上传任何数据。
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

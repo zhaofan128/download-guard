@@ -1,0 +1,118 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1b1f24;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #2e86ff;
+  --ok: #22a06b;
+  --bad: #e0554a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --fg: #e6e8eb;
+    --muted: #9aa3ad;
+    --line: #2a2f37;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 12px 14px 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.brand { display: flex; align-items: center; gap: 6px; }
+
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+}
+.dot.on { background: var(--ok); }
+.dot.off { background: var(--bad); }
+
+.state { color: var(--muted); font-size: 12px; }
+
+section { margin: 10px 0; }
+
+.pair p { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+
+.row { display: flex; gap: 6px; }
+
+input[type="text"], input:not([type]) {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+button {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: default; }
+
+.hint { font-size: 12px; color: var(--bad); min-height: 16px; }
+
+.switches { display: flex; flex-direction: column; gap: 6px; }
+
+.switch { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.switch input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+ul { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow: auto; }
+
+li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+li:last-child { border-bottom: 0; }
+li.empty { color: var(--muted); justify-content: flex-start; }
+
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { flex: 0 0 auto; font-size: 11px; color: var(--muted); }
+.tag.ok { color: var(--ok); }
+.tag.bad { color: var(--bad); }
+
+footer {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.hidden { display: none; }

@@ -55,7 +55,13 @@ data class GuardSettings(
      * 走 Shizuku 的 pm install，**不申请 REQUEST_INSTALL_PACKAGES**，
      * 这样安装包本身不会被 OPPO/华为等 ROM 的「安装前安全检测」拦成「已损坏」。
      */
-    val allowInstaller: Boolean = true
+    val allowInstaller: Boolean = true,
+
+    /**
+     * 浏览器 / 网盘 App 里点下载时，直接建任务并开始下（否则只记进候选列表，等用户手动确认）。
+     * 默认关闭：自动下载是「会消耗流量、会写文件」的动作，必须由用户显式打开。
+     */
+    val autoIntake: Boolean = false
 )
 
 class SettingsStore(private val context: Context) {
@@ -81,6 +87,7 @@ class SettingsStore(private val context: Context) {
         val RELAY_HOST = stringPreferencesKey("relay_host")
         val RELAY_PORT = intPreferencesKey("relay_port")
         val RELAY_TOKEN = stringPreferencesKey("relay_token")
+        val AUTO_INTAKE = booleanPreferencesKey("auto_intake")
     }
 
     val settings: Flow<GuardSettings> = context.guardDataStore.data
@@ -106,7 +113,8 @@ class SettingsStore(private val context: Context) {
                 relayHost = prefs[Keys.RELAY_HOST] ?: "",
                 relayPort = prefs[Keys.RELAY_PORT] ?: 8899,
                 relayToken = prefs[Keys.RELAY_TOKEN] ?: "",
-                allowInstaller = prefs[Keys.ALLOW_INSTALLER] ?: true
+                allowInstaller = prefs[Keys.ALLOW_INSTALLER] ?: true,
+                autoIntake = prefs[Keys.AUTO_INTAKE] ?: false
             )
         }
 
@@ -139,6 +147,8 @@ class SettingsStore(private val context: Context) {
     }
 
     suspend fun setAllowInstaller(value: Boolean) = put(Keys.ALLOW_INSTALLER, value)
+
+    suspend fun setAutoIntake(value: Boolean) = put(Keys.AUTO_INTAKE, value)
 
     suspend fun setDownloadThreads(value: Int) {
         context.guardDataStore.edit { it[Keys.DOWNLOAD_THREADS] = value.coerceIn(1, 256) }

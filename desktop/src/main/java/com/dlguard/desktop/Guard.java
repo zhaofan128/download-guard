@@ -146,4 +146,33 @@ final class Guard {
         }
         return "Origin 与服务地址不同源（" + origin + "）";
     }
+
+    // ---------------------------------------------------------------- 浏览器扩展
+
+    /**
+     * 浏览器扩展的 Origin 形如 {@code chrome-extension://<id>}。
+     *
+     * 网页脚本改不了 Origin，所以「Origin 是扩展协议」本身就是一条可信信号；
+     * 但 curl 能伪造，因此 hook 端点还要求配对令牌，不能只靠这一段判定。
+     */
+    static boolean isExtensionOrigin(String origin) {
+        if (origin == null) return false;
+        String o = origin.trim().toLowerCase(Locale.ROOT);
+        return o.startsWith("chrome-extension://") || o.startsWith("moz-extension://")
+                || o.startsWith("safari-web-extension://") || o.startsWith("ms-browser-extension://");
+    }
+
+    /**
+     * hook 端点的来源判定：Host 仍必须是本机，Origin 只能是扩展协议或空。
+     *
+     * 与普通 API 的区别只有一条：扩展发起的请求带 {@code Sec-Fetch-Site: cross-site}
+     * （从扩展进程到 127.0.0.1 在浏览器眼里就是跨站），所以这里不看 Sec-Fetch-Site；
+     * 代价是必须靠「扩展 Origin + 配对令牌」两道门，缺一不可。
+     */
+    static boolean hookOriginOk(String hostHeader, String origin, int port, boolean lan,
+                                List<String> extraHosts) {
+        if (!hostAllowed(hostHeader, port, lan, extraHosts)) return false;
+        if (origin == null || origin.trim().isEmpty()) return true;   // curl / 自检
+        return isExtensionOrigin(origin);
+    }
 }

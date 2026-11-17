@@ -9,7 +9,17 @@ data class CapturedLink(
     val url: String,
     val fileName: String?,
     val capturedAt: Long,
-    val source: String
+    val source: String,
+    /** 发起下载的页面地址；网盘直链缺它会 403。 */
+    val referer: String? = null,
+    /** 捕获时的浏览器 UA，空则用全局设置。 */
+    val userAgent: String? = null,
+    /**
+     * 登录态 Cookie。只在内存里放着，不写进 captured_links.tsv：
+     * 这个文件是明文 TSV，写进去等于把账号会话落在磁盘上。
+     */
+    val cookie: String? = null,
+    val size: Long = 0
 )
 
 /**
@@ -40,14 +50,31 @@ class CapturedLinks(private val context: Context) {
         runCatching { load() }
     }
 
-    fun record(url: String, fileName: String?, source: String) {
+    fun record(
+        url: String,
+        fileName: String?,
+        source: String,
+        referer: String? = null,
+        userAgent: String? = null,
+        cookie: String? = null,
+        size: Long = 0
+    ) {
         val trimmed = url.trim()
         if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) return
         if (trimmed.length > 4096) return
         val name = fileName?.trim()?.takeIf { it.isNotEmpty() }?.take(200)
         synchronized(lock) {
             entries.removeAll { it.url == trimmed }
-            entries.add(0, CapturedLink(trimmed, name, System.currentTimeMillis(), source))
+            entries.add(0, CapturedLink(
+                url = trimmed,
+                fileName = name,
+                capturedAt = System.currentTimeMillis(),
+                source = source,
+                referer = referer?.takeIf { it.isNotBlank() }?.take(4096),
+                userAgent = userAgent?.takeIf { it.isNotBlank() }?.take(512),
+                cookie = cookie?.takeIf { it.isNotBlank() }?.take(8192),
+                size = size.coerceAtLeast(0)
+            ))
             while (entries.size > MAX_ENTRIES) entries.removeAt(entries.size - 1)
             runCatching { persist() }
         }

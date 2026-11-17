@@ -49,4 +49,78 @@ class CapturedUrlReceiverTest {
     fun `下载路径即使没有扩展名也放行`() {
         assertTrue(CapturedUrlReceiver.acceptUrl("https://example.com/download/12345"))
     }
+
+    @Test
+    fun `载荷保留来源页与登录态`() {
+        val p = CapturedUrlReceiver.buildIntake(
+            url = "https://cdn.example.com/file.zip",
+            name = "安装包.zip",
+            source = "Xposed·DownloadManager",
+            referer = "https://pan.example.com/s/abc",
+            userAgent = "Mozilla/5.0 Test",
+            cookie = "BDUSS=1; STOKEN=2",
+            length = 1024
+        )
+        assertTrue(p != null)
+        requireNotNull(p)
+        assertTrue(p.referer == "https://pan.example.com/s/abc")
+        assertTrue(p.cookie == "BDUSS=1; STOKEN=2")
+        assertTrue(p.size == 1024L)
+        assertTrue(p.fileName == "安装包.zip")
+    }
+
+    @Test
+    fun `非 http 的 Referer 被丢弃`() {
+        val p = CapturedUrlReceiver.buildIntake(
+            url = "https://cdn.example.com/file.apk",
+            name = null,
+            source = null,
+            referer = "javascript:alert(1)",
+            userAgent = null,
+            cookie = null,
+            length = -5
+        )
+        requireNotNull(p)
+        assertTrue(p.referer == null)
+        // 负数长度按 0 处理，不能变成「已下完」
+        assertTrue(p.size == 0L)
+        assertTrue(p.source == "Xposed 模块")
+    }
+
+    @Test
+    fun `超长字段被截断`() {
+        val p = CapturedUrlReceiver.buildIntake(
+            url = "https://cdn.example.com/file.apk",
+            name = "n".repeat(1000),
+            source = "s".repeat(200),
+            referer = "https://example.com/" + "p".repeat(9000),
+            userAgent = "u".repeat(2000),
+            cookie = "c".repeat(20000),
+            length = 1
+        )
+        requireNotNull(p)
+        assertTrue(p.fileName!!.length == 200)
+        assertTrue(p.source.length == 48)
+        assertTrue(p.referer!!.length == 4096)
+        assertTrue(p.userAgent!!.length == 512)
+        assertTrue(p.cookie!!.length == 8192)
+    }
+
+    @Test
+    fun `不合法 URL 不产生载荷`() {
+        val p = CapturedUrlReceiver.buildIntake(
+            url = "https://example.com/index.html",
+            name = "x", source = "s", referer = null, userAgent = null, cookie = null, length = 0
+        )
+        assertTrue(p == null)
+    }
+
+    @Test
+    fun `同一链接五秒内只放行一次`() {
+        val url = "https://cdn.example.com/dedupe-" + System.nanoTime() + ".apk"
+        assertTrue(CapturedUrlReceiver.firstInWindow(url, now = 1_000_000))
+        assertFalse(CapturedUrlReceiver.firstInWindow(url, now = 1_000_000 + 4_999))
+        // 窗口过去后重新放行：断点续传/重试场景不能永久拉黑同一个地址
+        assertTrue(CapturedUrlReceiver.firstInWindow(url, now = 1_000_000 + 5_001))
+    }
 }

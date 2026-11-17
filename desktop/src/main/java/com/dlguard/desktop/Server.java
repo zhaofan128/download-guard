@@ -57,6 +57,9 @@ public final class Server {
     });
     private final Semaphore sseSlots = new Semaphore(12);
     private final Set<OutputStream> sseOutputs = ConcurrentHashMap.newKeySet();
+    /** 扩展重复投递同一链接时的短期去重：key → 任务 id，5 秒内不重复建任务。 */
+    private final Map<String, String> hookRecent = new ConcurrentHashMap<>();
+    private final Map<String, Long> hookRecentAt = new ConcurrentHashMap<>();
     private volatile boolean running = true;
     private HttpServer server;
     private ThreadPoolExecutor httpPool;
@@ -87,6 +90,11 @@ public final class Server {
         httpPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(24);
         server.setExecutor(httpPool);
         server.createContext("/", this::handle);
+        // 首次启动生成配对码；扩展要在弹窗里填这 8 位数字才能拿到投递令牌
+        if (engine.settings.hookPairCode == null || engine.settings.hookPairCode.isEmpty()) {
+            engine.settings.hookPairCode = newPairCode();
+            engine.applySettings(engine.settings);
+        }
     }
 
     /** 32 字节 SecureRandom，Base64URL 无填充；不再是 nanoTime 的可猜摘要。 */
@@ -126,6 +134,137 @@ public final class Server {
         server.stop(1);
     }
 
+    // ------------------------------------------------------------------ 浏览器接管
+
+    /** 这三个路径是扩展唯一能碰到的入口，别的路径仍然按同源规则办。 */
+    private static boolean isHookPath(String path) {
+        return path.equals("/api/hook") || path.equals("/api/hook/ping") || path.equals("/api/hook/pair");
+    }
+
+    /** 8 位数字配对码；用 SecureRandom，不用 Math.random。 */
+    private static String newPairCode() {
+        byte[] b = new byte[4];
+        new SecureRandom().nextBytes(b);
+        int v = ((b[0] & 0x7f) << 24) | ((b[1] & 0xff) << 16) | ((b[2] & 0xff) << 8) | (b[3] & 0xff);
+        return String.format(Locale.ROOT, "%08d", v % 100_000_000);
+    }
+
+    /** 预检：只回放行扩展需要的那几个头，不做通配。 */
+    private void preflight(HttpExchange ex, String origin) throws IOException {
+        Headers h = ex.getResponseHeaders();
+        h.add("Access-Control-Allow-Origin", origin.trim());
+        h.add("Access-Control-Allow-Methods", "GET, POST");
+        h.add("Access-Control-Allow-Headers", "Content-Type, X-DG-Hook-Token");
+        h.add("Access-Control-Max-Age", "600");
+        h.add("Vary", "Origin");
+        ex.sendResponseHeaders(204, -1);
+    }
+
+    private void hookCors(HttpExchange ex, String origin) {
+        if (!Guard.isExtensionOrigin(origin)) return;
+        Headers h = ex.getResponseHeaders();
+        h.add("Access-Control-Allow-Origin", origin.trim());
+        h.add("Vary", "Origin");
+    }
+
+    private void hookJson(HttpExchange ex, int code, Object body, String origin) throws IOException {
+        hookCors(ex, origin);
+        json(ex, code, body);
+    }
+
+    private void routeHook(HttpExchange ex, String path, String method, String origin) throws IOException {
+        hookCors(ex, origin);
+        if (!engine.settings.hookEnabled) {
+            hookJson(ex, 403, Json.obj("ok", false, "error", "浏览器接管已在设置里关闭"), origin);
+            return;
+        }
+        if (path.equals("/api/hook/ping")) {
+            if (!"GET".equalsIgnoreCase(method)) {
+                hookJson(ex, 405, Json.obj("ok", false, "error", "只支持 GET"), origin);
+                return;
+            }
+            boolean paired = engine.settings.hookToken != null && !engine.settings.hookToken.isEmpty();
+            hookJson(ex, 200, Json.obj("app", "dlguard", "api", 1,
+                    "paired", paired, "needPair", !paired), origin);
+            return;
+        }
+        if (path.equals("/api/hook/pair")) {
+            if (!"POST".equalsIgnoreCase(method)) {
+                hookJson(ex, 405, Json.obj("ok", false, "error", "只支持 POST"), origin);
+                return;
+            }
+            Map<String, Object> b = body(ex, 8 * 1024);
+            String code = Json.str(b, "code", "").trim();
+            String expect = engine.settings.hookPairCode == null ? "" : engine.settings.hookPairCode;
+            // 配对码只有 8 位，必须和令牌失败共用同一套窗口限流，否则可以慢慢猜
+            if (!constEq(expect, code)) {
+                denyAuth(ex);
+                return;
+            }
+            clearAuthFails(ex);
+            if (engine.settings.hookToken == null || engine.settings.hookToken.isEmpty()) {
+                engine.settings.hookToken = newToken();
+                engine.applySettings(engine.settings);
+            }
+            hookJson(ex, 200, Json.obj("ok", true, "token", engine.settings.hookToken), origin);
+            return;
+        }
+        // /api/hook：真正投递
+        if (!"POST".equalsIgnoreCase(method)) {
+            hookJson(ex, 405, Json.obj("ok", false, "error", "只支持 POST"), origin);
+            return;
+        }
+        String got = ex.getRequestHeaders().getFirst("X-DG-Hook-Token");
+        String want = engine.settings.hookToken == null ? "" : engine.settings.hookToken;
+        if (!constEq(want, got)) {
+            denyAuth(ex);
+            return;
+        }
+        clearAuthFails(ex);
+        Map<String, Object> b = body(ex, 64 * 1024);
+        String url = Json.str(b, "url", "").trim();
+        if (url.isEmpty()) {
+            hookJson(ex, 400, Json.obj("ok", false, "error", "缺少 url"), origin);
+            return;
+        }
+        String lower = url.toLowerCase(Locale.ROOT);
+        if (!(lower.startsWith("http://") || lower.startsWith("https://"))) {
+            hookJson(ex, 400, Json.obj("ok", false, "error", "只接受 http/https 链接"), origin);
+            return;
+        }
+        long size = Json.num(b, "size", Json.num(b, "fileSize", 0));
+        String key = url + "|" + size;
+        String dup = hookRecent.get(key);
+        Long at = hookRecentAt.get(key);
+        long now = System.currentTimeMillis();
+        if (dup != null && at != null && now - at < 5_000 && engine.get(dup) != null) {
+            hookJson(ex, 200, Json.obj("ok", true, "id", dup, "duplicate", true), origin);
+            return;
+        }
+        Engine.Intake in = new Engine.Intake();
+        in.referer = Json.str(b, "referer", Json.str(b, "pageUrl", ""));
+        in.cookie = Json.str(b, "cookie", "");
+        in.userAgent = Json.str(b, "userAgent", "");
+        in.fileName = Json.str(b, "fileName", "");
+        in.size = size;
+        in.source = "browser";
+        Task t;
+        try {
+            t = engine.add(url, Json.str(b, "dir", ""), Json.i(b, "connections", 0), "", in);
+        } catch (IllegalArgumentException e) {
+            hookJson(ex, 400, Json.obj("ok", false, "error", e.getMessage()), origin);
+            return;
+        }
+        hookRecent.put(key, t.id);
+        hookRecentAt.put(key, now);
+        if (hookRecent.size() > 500) {
+            hookRecent.clear();
+            hookRecentAt.clear();
+        }
+        engine.settings.hookLastSource = "browser";
+        hookJson(ex, 200, Json.obj("ok", true, "id", t.id, "name", t.name), origin);
+    }
+
     // ------------------------------------------------------------------ 路由
 
     private void handle(HttpExchange ex) {
@@ -146,13 +285,35 @@ public final class Server {
             String host = ex.getRequestHeaders().getFirst("Host");
             String origin = ex.getRequestHeaders().getFirst("Origin");
             String fetchSite = ex.getRequestHeaders().getFirst("Sec-Fetch-Site");
+            String path = ex.getRequestURI().getPath();
+            String method = ex.getRequestMethod();
+
+            // 浏览器接管端点单独走门：扩展的 Origin 是 chrome-extension://，
+            // 天然过不了「同源」这一条。代价是这里必须靠「扩展 Origin + 配对令牌」两道门，
+            // 且只对这三个路径开口，别的路径一律按同源规则办。
+            if (isHookPath(path)) {
+                if (!Guard.hookOriginOk(host, origin, port, lan, extraHosts)) {
+                    json(ex, 403, Json.obj("ok", false, "error",
+                            "只接受本机地址 + 浏览器扩展来源"));
+                    return;
+                }
+                if ("OPTIONS".equalsIgnoreCase(method)) {
+                    if (!Guard.isExtensionOrigin(origin)) {
+                        json(ex, 403, Json.obj("ok", false, "error", "非扩展来源不发预检"));
+                        return;
+                    }
+                    preflight(ex, origin);
+                    return;
+                }
+                routeHook(ex, path, method, origin);
+                return;
+            }
+
             if (!Guard.allowed(host, origin, fetchSite, port, lan, extraHosts)) {
                 json(ex, 403, Json.obj("ok", false,
                         "error", Guard.rejectReason(host, origin, fetchSite, port, lan, extraHosts)));
                 return;
             }
-            String path = ex.getRequestURI().getPath();
-            String method = ex.getRequestMethod();
             // 不响应预检：跨源页面即使想带 X-DG-Token 也过不了浏览器这一关
             if ("OPTIONS".equalsIgnoreCase(method)) {
                 json(ex, 403, Json.obj("ok", false, "error", "不响应跨源预检请求"));
@@ -252,9 +413,14 @@ public final class Server {
     }
 
     private boolean sameToken(String candidate) {
-        return candidate != null && !candidate.isEmpty()
-                && MessageDigest.isEqual(token.getBytes(StandardCharsets.UTF_8),
-                candidate.getBytes(StandardCharsets.UTF_8));
+        return constEq(token, candidate);
+    }
+
+    /** 常量时间比较两个字符串；任一侧为空都返回 false（空令牌等于没有令牌）。 */
+    private static boolean constEq(String a, String b) {
+        if (a == null || b == null || a.isEmpty() || b.isEmpty()) return false;
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
     }
 
     private void denyAuth(HttpExchange ex) throws IOException {
@@ -319,6 +485,41 @@ public final class Server {
             json(ex, 200, Json.obj("version", Engine.VERSION));
             return;
         }
+        if (path.equals("/api/hook/info")) {
+            boolean paired = engine.settings.hookToken != null && !engine.settings.hookToken.isEmpty();
+            json(ex, 200, Json.obj(
+                    "enabled", engine.settings.hookEnabled,
+                    "paired", paired,
+                    "pairCode", engine.settings.hookPairCode == null ? "" : engine.settings.hookPairCode,
+                    "lastSource", engine.settings.hookLastSource));
+            return;
+        }
+        if (path.equals("/api/hook/reset-pair") && "POST".equals(method)) {
+            engine.settings.hookPairCode = newPairCode();
+            engine.settings.hookToken = "";
+            engine.applySettings(engine.settings);
+            json(ex, 200, Json.obj("ok", true, "pairCode", engine.settings.hookPairCode));
+            return;
+        }
+        if (path.equals("/api/hook/extension.zip")) {
+            byte[] zip;
+            try (InputStream in = Server.class.getResourceAsStream("/extension.zip")) {
+                if (in == null) {
+                    json(ex, 404, Json.obj("ok", false,
+                            "error", "这个 jar 里没有内置扩展包，请从仓库 browser-extension/ 目录加载"));
+                    return;
+                }
+                zip = readAll(in, 8 * 1024 * 1024);
+            }
+            ex.getResponseHeaders().add("Content-Type", "application/zip");
+            ex.getResponseHeaders().add("Content-Disposition",
+                    "attachment; filename=\"DownloadGuard-extension.zip\"");
+            ex.sendResponseHeaders(200, zip.length);
+            try (OutputStream os = ex.getResponseBody()) {
+                os.write(zip);
+            }
+            return;
+        }
         if (path.equals("/api/tasks") && "POST".equals(method)) {
             Map<String, Object> body = body(ex);
             String dir = Json.str(body, "dir", "");
@@ -376,6 +577,9 @@ public final class Server {
                 return;
             }
             s.saveDir = engine.settings.saveDir;
+            // 扩展配对凭据不接受请求体覆盖：设置页能改的只是开关，不是令牌
+            s.hookToken = engine.settings.hookToken;
+            s.hookPairCode = engine.settings.hookPairCode;
             if (!body.containsKey("allowedDirs")) {
                 s.allowedDirs = new ArrayList<>(engine.settings.allowedDirs);
             }
@@ -392,7 +596,7 @@ public final class Server {
                 json(ex, 400, Json.obj("ok", false, "error", e.getMessage()));
                 return;
             }
-            Settings s = Settings.fromMap(engine.settings.toMap());
+            Settings s = Settings.fromMap(engine.settings.toDiskMap());
             String old = s.saveDir;
             s.saveDir = p.toString();
             if (!s.allowedDirs.contains(old)) s.allowedDirs.add(old);
@@ -653,7 +857,11 @@ public final class Server {
     }
 
     private Map<String, Object> body(HttpExchange ex) throws IOException {
-        byte[] data = readAll(ex.getRequestBody(), 32 * 1024 * 1024);
+        return body(ex, 32 * 1024 * 1024);
+    }
+
+    private Map<String, Object> body(HttpExchange ex, int limit) throws IOException {
+        byte[] data = readAll(ex.getRequestBody(), limit);
         if (data.length == 0) return new LinkedHashMap<>();
         return Json.map(Json.parse(new String(data, StandardCharsets.UTF_8)));
     }

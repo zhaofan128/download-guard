@@ -52,6 +52,7 @@ class GuardHook : IXposedHookLoadPackage {
         hookAddCompletedDownload(lpparam)
         hookDownloadReceiver(lpparam)
         hookWebViewDownloadListener(lpparam)
+        hookDownloadManagerEnqueue(lpparam)
         hookBrowserCandidates(lpparam)
     }
 
@@ -138,7 +139,8 @@ class GuardHook : IXposedHookLoadPackage {
                         val original = param.args.getOrNull(0) as? android.webkit.DownloadListener ?: return
                         val context = (param.thisObject as? android.webkit.WebView)?.context ?: return
                         if (original is CapturingDownloadListener) return
-                        param.args[0] = CapturingDownloadListener(context, original)
+                        val view = param.thisObject as? android.webkit.WebView
+                        param.args[0] = CapturingDownloadListener(context, original).also { it.webView = view }
                     }
                 }
             )
@@ -159,11 +161,24 @@ class GuardHook : IXposedHookLoadPackage {
             mimetype: String?,
             contentLength: Long
         ) {
-            runCatching { report(url, contentDisposition) }
+            runCatching {
+                // 页面地址就是最可靠的 Referer：网盘直链几乎都校验它
+                val pageUrl = (webView?.url ?: "").takeIf { it.startsWith("http") }
+                report(url, contentDisposition, userAgent, pageUrl, contentLength, mimetype)
+            }
             delegate.onDownloadStart(url, userAgent, contentDisposition, mimetype, contentLength)
         }
 
-        private fun report(url: String?, contentDisposition: String?) {
+        var webView: android.webkit.WebView? = null
+
+        private fun report(
+            url: String?,
+            contentDisposition: String?,
+            userAgent: String?,
+            referer: String?,
+            contentLength: Long,
+            mime: String?
+        ) {
             if (url.isNullOrBlank()) return
             if (!url.startsWith("http://") && !url.startsWith("https://")) return
             val name = parseFileName(contentDisposition) ?: url.substringAfterLast('/').substringBefore('?')
@@ -172,6 +187,10 @@ class GuardHook : IXposedHookLoadPackage {
                 .putExtra("url", url)
                 .putExtra("name", name.take(200))
                 .putExtra("source", "Xposed·WebView")
+                .putExtra("referer", referer?.take(4096) ?: "")
+                .putExtra("userAgent", userAgent?.take(512) ?: "")
+                .putExtra("mime", mime?.take(120) ?: "")
+                .putExtra("length", contentLength)
                 .addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             runCatching { context.sendBroadcast(intent) }
         }
@@ -185,6 +204,61 @@ class GuardHook : IXposedHookLoadPackage {
             val plain = Regex("filename\\s*=\\s*\"?([^\";]+)", RegexOption.IGNORE_CASE).find(contentDisposition)
             return plain?.groupValues?.get(1)?.trim()
         }
+    }
+
+    /**
+     * 接管系统下载器：网盘 App 里点「下载」很多是直接走 DownloadManager，不经过 WebView
+     * 的 DownloadListener。这里在 enqueue 之后把请求的 URI 与请求头回传主 App，
+     * 并按用户设置决定是否把系统那份删掉（否则同一个文件会下两遍）。
+     */
+    private fun hookDownloadManagerEnqueue(lpparam: XC_LoadPackage.LoadPackageParam) {
+        runCatching {
+            XposedHelpers.findAndHookMethod(
+                "android.app.DownloadManager",
+                lpparam.classLoader,
+                "enqueue",
+                "android.app.DownloadManager\$Request",
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        runCatching {
+                            val id = param.result as? Long ?: return
+                            if (id <= 0) return
+                            val request = param.args.getOrNull(0) ?: return
+                            val uri = XposedHelpers.callMethod(request, "getUri") as? Uri ?: return
+                            val url = uri.toString()
+                            if (!url.startsWith("http://") && !url.startsWith("https://")) return
+                            @Suppress("UNCHECKED_CAST")
+                            val headers = runCatching {
+                                XposedHelpers.callMethod(request, "getHeaders") as? Map<String, String>
+                            }.getOrNull().orEmpty()
+                            val context = runCatching {
+                                XposedHelpers.callMethod(request, "getContext") as? Context
+                            }.getOrNull()
+                            val title = runCatching {
+                                XposedHelpers.callMethod(request, "getTitle") as? String
+                            }.getOrNull()
+                            val intent = android.content.Intent("com.dlguard.action.CAPTURED_URL")
+                                .setPackage("com.dlguard")
+                                .putExtra("url", url)
+                                .putExtra("name", (title ?: "").take(200))
+                                .putExtra("source", "Xposed·DownloadManager")
+                                .putExtra("referer", (headers["Referer"] ?: headers["referer"] ?: "").take(4096))
+                                .putExtra("userAgent", (headers["User-Agent"] ?: headers["user-agent"] ?: "").take(512))
+                                .putExtra("cookie", (headers["Cookie"] ?: headers["cookie"] ?: "").take(8192))
+                                .putExtra("takeover", true)
+                                .addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                            val sent = runCatching { context?.sendBroadcast(intent) != null }.getOrDefault(false)
+                            if (!sent) {
+                                // 拿不到 Context 就退化成「只回传」，不删系统下载
+                                log("DownloadManager.enqueue 命中但拿不到 Context，仅回传 URL")
+                            }
+                            log("接管系统下载 id=$id url=${url.take(80)}")
+                        }
+                    }
+                }
+            )
+            log("已 hook DownloadManager.enqueue")
+        }.onFailure { log("DownloadManager.enqueue hook 失败：${it.message}") }
     }
 
     /** 浏览器自有下载器类名随版本变化，这里只做候选尝试，失败不影响宿主。 */

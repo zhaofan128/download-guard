@@ -576,6 +576,23 @@
 
   // ---------------------------------------------------------------- 设置
 
+  async function refreshHookInfo() {
+    try {
+      const info = await api('/api/hook/info', undefined, 'GET');
+      const codeEl = $('#hookPairCode');
+      if (codeEl && document.activeElement !== codeEl) codeEl.value = info.pairCode || '';
+      const note = $('#hookPairNote');
+      if (note) {
+        note.textContent = info.paired
+          ? '已配对：扩展可以直接投递。重置后旧扩展会失效。'
+          : '还没配对：打开扩展图标填入上面的 8 位数字。';
+        note.className = 'inline-note' + (info.paired ? ' ok' : '');
+      }
+    } catch (e) {
+      /* 设置页没打开时不必提示 */
+    }
+  }
+
   function fillSettings(s, env, onlyIfIdle) {
     if (!s) return;
     const set = (id, v) => {
@@ -597,6 +614,8 @@
     set('#setQuarantine', s.quarantineOnMismatch);
     set('#setHlsRemux', s.hlsRemux);
     set('#setAria2', s.aria2Path);
+    set('#setHookEnabled', s.hookEnabled);
+    refreshHookInfo();
     $('#valConcurrent').textContent = s.maxConcurrent;
     $('#valConn').textContent = s.connections;
     $('#newDir').value = $('#newDir').value || s.saveDir;
@@ -643,7 +662,8 @@
       verifyApk: $('#setVerifyApk').checked,
       quarantineOnMismatch: $('#setQuarantine').checked,
       hlsRemux: $('#setHlsRemux').checked,
-      aria2Path: $('#setAria2').value.trim()
+      aria2Path: $('#setAria2').value.trim(),
+      hookEnabled: $('#setHookEnabled').checked
     };
   }
 
@@ -860,6 +880,36 @@
     });
 
     $('#saveSettings').addEventListener('click', saveSettings);
+    $('#copyPairCode').addEventListener('click', async () => {
+      const code = $('#hookPairCode').value;
+      if (!code) return;
+      try {
+        await navigator.clipboard.writeText(code);
+        toast('配对码已复制', 'good');
+      } catch (e) {
+        toast('复制失败，请手动选中', 'bad');
+      }
+    });
+    $('#downloadExtension').addEventListener('click', () => {
+      // 走会话 Cookie 鉴权，浏览器直接下载 zip
+      const a = document.createElement('a');
+      a.href = '/api/hook/extension.zip';
+      a.download = 'DownloadGuard-extension.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast('已开始下载扩展，解压后加载', 'good');
+    });
+    $('#resetPair').addEventListener('click', async () => {
+      try {
+        const r = await api('/api/hook/reset-pair', {});
+        $('#hookPairCode').value = r.pairCode || '';
+        toast('已重置，扩展需要重新配对', 'good');
+        refreshHookInfo();
+      } catch (e) {
+        toast(e.message, 'bad');
+      }
+    });
     $('#saveTopBtn').addEventListener('click', saveSettings);
     $('#resetSettings').addEventListener('click', async () => {
       if (!confirm('恢复默认设置？保存目录会回到系统下载文件夹。')) return;
