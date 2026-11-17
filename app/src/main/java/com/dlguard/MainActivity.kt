@@ -88,7 +88,8 @@ class MainActivity : ComponentActivity() {
         override fun onRequestPermissionResult(requestCode: Int, grantResult: Int) {
             if (requestCode != SettingViewModel.SHIZUKU_REQUEST_CODE) return
             if (grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                ShizukuHelper.refresh()
+                // 状态评估是 binder 往返，放到后台，别占着主线程
+                ShizukuHelper.refreshAsync()
                 viewModel.notifyMessage("Shizuku 已授权，特权功能可用")
             } else {
                 viewModel.notifyMessage("Shizuku 授权被拒绝，相关功能将走降级路径")
@@ -170,7 +171,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        ShizukuHelper.refresh()
+        // 每次回前台都核对 Shizuku 状态：binder 往返放后台，主线程只读 StateFlow。
+        // 原来直接 refresh() 在 Shizuku 未运行时要等多次 binder 超时，是最容易触发的 ANR 路径。
+        ShizukuHelper.refreshAsync()
         // 连接仍未送达且当前没有索取任务时再补一次：覆盖「打开 Shizuku 启动服务后回到本应用」的路径
         if (ShizukuHelper.status.value == ShizukuHelper.Status.BINDER_PENDING &&
             !ShizukuHelper.isRequesting()

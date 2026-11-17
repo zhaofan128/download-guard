@@ -95,7 +95,9 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     fun setAutoStart(value: Boolean) = hotSwitch("auto_start") {
         runCatching {
             container.settings.setAutoStart(value)
-            if (value && PermissionHelper.hasStorageAccess(context)) ServiceController.start(context)
+            if (value && PermissionHelper.hasStorageAccess(context)) {
+                withContext(Dispatchers.IO) { ServiceController.start(context) }
+            }
         }.onFailure {
             runCatching { viewModelScope.launch { container.settings.setAutoStart(!value) } }
         }
@@ -138,7 +140,9 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     fun setMonitorEnabled(value: Boolean) = hotSwitch("monitor_enabled") {
         runCatching {
             container.settings.setMonitorEnabled(value)
-            if (value) ServiceController.start(context) else ServiceController.stop(context)
+            withContext(Dispatchers.IO) {
+                if (value) ServiceController.start(context) else ServiceController.stop(context)
+            }
         }.onFailure {
             runCatching { viewModelScope.launch { container.settings.setMonitorEnabled(!value) } }
         }
@@ -182,16 +186,20 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     fun setAccessibilityCapture(value: Boolean) = hotSwitch("accessibility_capture") {
         runCatching {
             container.settings.setAccessibilityCapture(value)
+            // 这几步要读 Settings.Secure（ContentResolver IPC）、跑 Shizuku user service 的 shell，
+            // 都在主线程会直接卡住；首次安装后 Shizuku 未就绪时一次 exec 能等上数秒 → ANR。
+            val running = withContext(Dispatchers.IO) { isAccessibilityServiceEnabled() }
             when {
                 !value -> {
                     if (ShizukuHelper.hasPermission()) {
-                        PrivilegeOps.disableSelfAccessibility()
+                        withContext(Dispatchers.IO) { PrivilegeOps.disableSelfAccessibility() }
                     }
                     emit("已关闭无障碍链接抓取")
                 }
-                isAccessibilityServiceEnabled() -> emit("无障碍链接抓取已在运行")
+                running -> emit("无障碍链接抓取已在运行")
                 ShizukuHelper.hasPermission() -> {
-                    PrivilegeOps.enableSelfAccessibility().fold(
+                    val result = withContext(Dispatchers.IO) { PrivilegeOps.enableSelfAccessibility() }
+                    result.fold(
                         onSuccess = { emit("已静默开启无障碍服务（Shizuku）") },
                         onFailure = { error ->
                             PermissionHelper.openAccessibilitySettings(context)
@@ -351,29 +359,41 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
 
     /** 首页/设置「连接 Shizuku」按钮：按真实状态分流（索取连接 → 授权）。 */
     fun requestShizukuPermission(listener: ShizukuHelperStatusBridge? = null) {
-        when (val current = ShizukuHelper.refresh()) {
-            ShizukuHelper.Status.NOT_INSTALLED -> emit("未安装 Shizuku 管理器；可在应用商店或官网安装后回来连接")
+        viewModelScope.launch {
+            // refresh / requestPermission 内部都是 binder 往返，全部挪到 IO：
+            // 这条路径由用户点击触发，主线程一卡就是「没有响应」
+            when (val current = withContext(Dispatchers.IO) { ShizukuHelper.refresh() }) {
+                ShizukuHelper.Status.NOT_INSTALLED -> emit("未安装 Shizuku 管理器；可在应用商店或官网安装后回来连接")
 
-            ShizukuHelper.Status.READY -> emit("Shizuku 已连接并授权")
-            ShizukuHelper.Status.NEED_PERMISSION -> {
-                val result = ShizukuHelper.requestPermission(SHIZUKU_REQUEST_CODE)
-                result.onFailure { emit(it.message ?: "无法拉起 Shizuku 授权") }
-            }
+                ShizukuHelper.Status.READY -> emit("Shizuku 已连接并授权")
+                ShizukuHelper.Status.NEED_PERMISSION -> {
+                    val result = withContext(Dispatchers.IO) {
+                        ShizukuHelper.requestPermission(SHIZUKU_REQUEST_CODE)
+                    }
+                    result.onFailure { emit(it.message ?: "无法拉起 Shizuku 授权") }
+                }
 
-            // 连接未送达 / binder 已死：先走 REQUEST_BINDER 协议向管理器索取，
-            // 管理器进程被广播拉起后几秒内回传；拿到后自动续走授权
-            ShizukuHelper.Status.BINDER_PENDING, ShizukuHelper.Status.NOT_RUNNING -> {
-                emit("正在向 Shizuku 管理器索取连接…")
-                ShizukuHelper.requestBinder { ok ->
-                    if (!ok) {
-                        emit("未能拿到 Shizuku 连接：请确认 Shizuku 管理器里服务正在运行，可尝试重启一次 Shizuku 服务后重试")
-                    } else when (ShizukuHelper.refresh()) {
-                        ShizukuHelper.Status.READY -> emit("Shizuku 已连接")
-                        ShizukuHelper.Status.NEED_PERMISSION -> {
-                            val result = ShizukuHelper.requestPermission(SHIZUKU_REQUEST_CODE)
-                            result.onFailure { emit(it.message ?: "无法拉起 Shizuku 授权") }
+                // 连接未送达 / binder 已死：先走 REQUEST_BINDER 协议向管理器索取，
+                // 管理器进程被广播拉起后几秒内回传；拿到后自动续走授权
+                ShizukuHelper.Status.BINDER_PENDING, ShizukuHelper.Status.NOT_RUNNING -> {
+                    emit("正在向 Shizuku 管理器索取连接…")
+                    ShizukuHelper.requestBinder { ok ->
+                        if (!ok) {
+                            emit("未能拿到 Shizuku 连接：请确认 Shizuku 管理器里服务正在运行，可尝试重启一次 Shizuku 服务后重试")
+                        } else {
+                            viewModelScope.launch {
+                                when (withContext(Dispatchers.IO) { ShizukuHelper.refresh() }) {
+                                    ShizukuHelper.Status.READY -> emit("Shizuku 已连接")
+                                    ShizukuHelper.Status.NEED_PERMISSION -> {
+                                        val result = withContext(Dispatchers.IO) {
+                                            ShizukuHelper.requestPermission(SHIZUKU_REQUEST_CODE)
+                                        }
+                                        result.onFailure { emit(it.message ?: "无法拉起 Shizuku 授权") }
+                                    }
+                                    else -> emit("Shizuku 连接已恢复，请稍候刷新状态")
+                                }
+                            }
                         }
-                        else -> emit("Shizuku 连接已恢复，请稍候刷新状态")
                     }
                 }
             }
@@ -383,7 +403,9 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     /** 免手点授权：appops 直接授予所有文件访问。 */
     fun grantAllFilesAccessViaShizuku() {
         viewModelScope.launch {
-            PrivilegeOps.grantAllFilesAccess().fold(
+            // 一条 appops + 两条 pm grant，全走 Shizuku user service 的同步 exec，必须在 IO
+            val result = withContext(Dispatchers.IO) { PrivilegeOps.grantAllFilesAccess() }
+            result.fold(
                 onSuccess = { emit("已通过 Shizuku 静默授予所有文件访问权限，回到首页即可启动守护") },
                 onFailure = { emit("特权授权失败：${it.message}。请手动到系统设置开启") }
             )
@@ -393,7 +415,8 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     /** 电池白名单：deviceidle whitelist。 */
     fun joinBatteryWhitelistViaShizuku() {
         viewModelScope.launch {
-            PrivilegeOps.addToBatteryWhitelist().fold(
+            val result = withContext(Dispatchers.IO) { PrivilegeOps.addToBatteryWhitelist() }
+            result.fold(
                 onSuccess = { emit("已加入电池优化白名单") },
                 onFailure = { emit("白名单写入失败：${it.message}。请手动到系统设置开启") }
             )
@@ -408,7 +431,8 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
                 emit("未连接 Shizuku，已跳转系统无障碍设置，请手动勾选浏览器下载接管")
                 return@launch
             }
-            PrivilegeOps.enableSelfAccessibility().fold(
+            val result = withContext(Dispatchers.IO) { PrivilegeOps.enableSelfAccessibility() }
+            result.fold(
                 onSuccess = { emit("已静默开启无障碍服务") },
                 onFailure = {
                     PermissionHelper.openAccessibilitySettings(context)

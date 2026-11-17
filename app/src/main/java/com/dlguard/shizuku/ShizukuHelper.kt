@@ -64,12 +64,15 @@ object ShizukuHelper {
     /** Application.onCreate 调用一次。 */
     fun init(context: Context) {
         appContext = context.applicationContext
-        refresh()
-        if (initialized.getAndSet(true)) return
+        if (initialized.getAndSet(true)) {
+            refreshAsync()
+            return
+        }
         runCatching {
             Shizuku.addBinderReceivedListenerSticky(object : Shizuku.OnBinderReceivedListener {
                 override fun onBinderReceived() {
-                    refresh()
+                    // 回调可能落在主线程，状态评估里有多次 binder 往返
+                    refreshAsync()
                 }
             })
         }
@@ -82,9 +85,25 @@ object ShizukuHelper {
         }
         // 覆盖安装 / 进程被杀会错过管理器的 binder 推送：启动时主动索取一次，
         // 服务在跑的话几秒内自动就绪；服务没跑则保持 BINDER_PENDING，等用户点「连接」
-        if (_status.value == Status.BINDER_PENDING) {
-            requestBinder()
-        }
+        refreshAsync()
+    }
+
+    /**
+     * 后台线程做一次状态评估。
+     *
+     * `computeStatus()` 要走 pingBinder / getVersion / checkSelfPermission 三次 binder 往返，
+     * Shizuku 没在跑时每次都要等 binder 超时；而这些调用原来直接发生在
+     * `Application.onCreate`、`Activity.onResume` 和设置页的开关回调里 —— 全在主线程。
+     * 首次安装后 Shizuku 尚未就绪时，冷启动或点一下「无障碍链接爬取」就会卡满 5 秒触发 ANR
+     * （用户录屏里的「浏览器下载接管没有响应」）。所有非 UI 线程的调用点统一走这里。
+     */
+    fun refreshAsync() {
+        Thread({
+            runCatching {
+                refresh()
+                if (_status.value == Status.BINDER_PENDING) requestBinder()
+            }
+        }, "shizuku-refresh").start()
     }
 
     /** 重新评估连接状态并返回。读 Shizuku 的所有调用都包了 runCatching。 */
