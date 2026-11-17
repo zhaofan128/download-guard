@@ -5,14 +5,16 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-8.0%2B-3ddc84.svg)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
+[![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
-一个不需要 root 的 Android 下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起还内置了完整的 **BT / 磁力下载**（独立「BT」标签页）。
+一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——同一个下载内核，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
 - Kotlin + Coroutines + Jetpack Compose（Material 3）
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
+- 电脑版：纯 Java 11 实现，**零第三方依赖**，一个 106 KB 的 jar；界面用系统浏览器渲染，手机/平板连同一 WiFi 也能打开（`--lan`，带随机令牌）
 - **173 个 JVM 单元测试、31 个测试类，CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
 - 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、磁力链接解析、BT 状态映射与限速展示、真实 APK 的 v2 签名摘要重算
 
@@ -30,22 +32,76 @@
 
 这张表会随着能力变化更新，不写「理论上支持」。
 
+桌面版另有 **22 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、ZIP 结构、真实 APK 的 v2/v3 签名与证书指纹提取。CI 里独立一个 job 跑编译 + 自检 + 启动烟雾测试。
+
 关于测试的实话：173 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
 
 ## 下载
 
-**[⬇ 下载最新版 APK](https://github.com/zhaofan128/download-guard/releases/latest)**
+**[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
+
+3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
+
+### 电脑版（Windows / macOS / Linux）
+
+下载 `DownloadGuard-Desktop-3.0.0.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
+
+| 系统 | 启动方式 |
+| --- | --- |
+| Windows | 双击 `start-windows.bat` |
+| macOS | 双击 `start-macos.command` |
+| Linux | 终端执行 `./start-linux.sh` |
+
+启动后自动打开浏览器；关掉浏览器不会中断下载，回到终端按 `Ctrl + C` 才退出（会先保存断点）。
+
+想让手机、平板用同一套界面：
+
+```bash
+java -jar DownloadGuard-Desktop-3.0.0.jar --lan
+```
+
+终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
+
+### Android 版
 
 下载后直接安装。首次启动会引导授予「所有文件访问权限」与「通知权限」，之后把链接粘进来就能用。
 
-2.2.0 起同时提供两个包，功能完全一致，只是打包的原生库架构不同：
+3.0.0 同时提供两个包，功能完全一致，只是打包的原生库架构不同：
 
 | 包 | 大小 | 适用 |
 | --- | --- | --- |
-| `DownloadGuard-2.2.0-bt-arm64.apk` | 24.4 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
-| `DownloadGuard-2.2.0-bt.apk` | 73 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
+| `DownloadGuard-3.0.0-arm64.apk` | 24.4 MB（25,625,486 字节） | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
+| `DownloadGuard-3.0.0-universal.apk` | 73 MB（73,288,816 字节） | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
 
 > **装不上先核对字节数**。APK 的签名块在文件末尾，下载中断会留下一个「能识别成 APK、但没有签名」的半截文件，安装器报的就是「安装包没有签名文件」。用文件管理器看属性里的精确大小，和 Release 页面写的字节数对上再装。
+
+---
+
+## 电脑版（Windows / macOS / Linux）
+
+| 桌面端 | 手机浏览器 |
+| --- | --- |
+| ![桌面端](docs/desktop.png) | ![手机端](docs/mobile.png) |
+
+不是把 Android 界面塞进 Electron，也不是另写一套 Swing。电脑版是「**本地服务 + 系统浏览器**」：
+
+- 启动时只监听 `127.0.0.1`，用系统默认浏览器打开；字体、缩放、触控滚动跟随系统，Windows 高分屏不会糊。
+- 界面是响应式的：≥1120px 左侧完整导航，720–1120px 收成图标栏，<720px 换成底部标签栏 + 悬浮按钮，380px 以下再压一档。**同一套 UI 在电脑、平板、手机上都是原生手感**，不用装 App。
+- 内核和 Android 版同源同思路：分段并发、断点续传、全局限速、HLS + AES-128、BT（走本机 aria2c）、SHA-256、APK v1/v2/v3 签名体检、失败文件隔离。
+- 状态推送用 SSE，断线自动重连并有轮询兜底；所有分段进度落盘，进程被杀也能续。
+- 纯 Java 11、零第三方依赖：jar 只有 106 KB，没有 npm、没有 node_modules、没有运行时补丁。
+
+| 能力 | 电脑版 | Android 版 |
+| --- | --- | --- |
+| 多连接分段下载 | ✅ 1–32 连接 | ✅ 最多 256 |
+| 断点续传 | ✅ | ✅ |
+| HLS 点播 + AES-128 | ✅ 可调 ffmpeg 封装 mp4 | ✅ |
+| BT / 磁力 | ✅ 需本机 aria2c | ✅ 内置 libtorrent4j |
+| 下载后 SHA-256 / APK 签名校验 | ✅ | ✅ |
+| 浏览器下载接管 | ➖ 直接粘贴链接 | ✅ 嗅探 + 无障碍 |
+| 手机远程使用 | ✅ 浏览器打开，无需安装 | ➖ |
+
+完整说明、参数与常见问题见 [desktop/README.md](desktop/README.md)。
 
 ---
 
@@ -225,7 +281,11 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 全部单元测试（142 个用例 / 23 个测试类）
+./gradlew :app:testDebugUnitTest      # 全部单元测试（173 个用例 / 31 个测试类）
+
+cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
+java -jar dist/DownloadGuard-Desktop-3.0.0.jar --selftest   # 22 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.0.0.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -259,8 +319,18 @@ DownloadGuard/
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    142 个 JVM 单元测试（23 个测试类）
-├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包，测试数为 0 直接失败
+├── app/src/test/    173 个 JVM 单元测试（31 个测试类）
+├── desktop/         电脑版：纯 Java 11，零依赖，自带 HTTP 服务与响应式 Web UI
+│   ├── src/main/java/com/dlguard/desktop/
+│   │   ├── Engine.java      分段下载、断点续传、队列、全局限速
+│   │   ├── Hls.java         m3u8 解析、AES-128、分片拼接、ffmpeg 封装
+│   │   ├── Torrent.java     aria2 JSON-RPC 桥接
+│   │   ├── Integrity.java   ZIP CRC + APK Signing Block / 证书指纹
+│   │   ├── Server.java      内嵌 HTTP、REST、SSE、静态资源
+│   │   └── SelfTest.java    22 项无框架自检
+│   └── src/main/resources/web/   index.html + app.css + app.js（无构建）
+├── docs/            README 用截图
+├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包 + 桌面版自检，测试数为 0 直接失败
 ├── xposed/          LSPosed 模块（可选，条件编译）
 └── dist/            本地构建产物（不随仓库提交）
 ```
@@ -310,9 +380,8 @@ DownloadGuard/
 发版前必须：CI 全绿 → `assembleRelease` 能出包 → Release 里写清楚「改了什么、影响了谁」。
 不为了刷版本号而发版；`2.0.0 → 2.0.1` 应该是「修了一个真实问题」，而不是「改了一段 README」。
 
-> 这次从 2.0.0 升到 **2.1.0**，是因为多了一件用户能感知的新能力（HLS 点播下载），按上表该升次版本号。
-> 至于 README 数字对不上、CI 缺失、清单里重复声明权限——这些都属于「不发版」的那一栏，跟着本次能力一起进包，不单独占版本号。
-> 下一次如果只有修复，就是 2.1.1；不搞 2.1.1→2.1.2→2.1.3 一连串补丁号。完整判定规则见 [VERSIONING.md](VERSIONING.md)。
+> 这次从 2.2.0 升到 **3.0.0**：多了「在电脑上用」这件事，还改了界面的适配模型（手机/平板/桌面三档断点），属于用户能明确说出的新能力。按 `x.Y.0` 的规则本来只该升到 2.3.0，之所以动 `MAJOR`，是因为交付形态从「一个 APK」变成「APK + 跨平台桌面版」，安装方式、运行环境、安全边界都变了，旧的 2.x 语义已经装不下。
+> 2.2.0 的修复（`.part` 跳过验签、调度器竞态、局域网 token）继续保留在 3.0.0 里，没有回退。完整判定规则见 [VERSIONING.md](VERSIONING.md)。
 
 ---
 

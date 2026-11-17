@@ -1,0 +1,16 @@
+{
+  "name": "DownloadGuard Desktop",
+  "short_name": "DownloadGuard",
+  "description": "多连接下载、断点续传、HLS 与 BT/磁力，下载完自动校验 SHA-256 与 APK 签名。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0a0b11",
+  "theme_color": "#6d5df6",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

@@ -16,7 +16,11 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -43,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -59,6 +64,7 @@ import com.dlguard.ui.SniffActivity
 import com.dlguard.ui.components.BottomTab
 import com.dlguard.ui.components.GlassBackground
 import com.dlguard.ui.components.GlassBottomBar
+import com.dlguard.ui.components.GlassNavRail
 import com.dlguard.ui.components.PermissionGuideDialog
 import com.dlguard.ui.screens.BtScreen
 import com.dlguard.ui.screens.HomeScreen
@@ -250,12 +256,32 @@ private fun AppShell(
             BottomTab("设置", Icons.Filled.Settings)
         )
     }
+    // 自适应断点：手机竖屏走底部胶囊栏，平板/折叠屏展开/横屏（≥600dp）走左侧竖栏。
+    // 600dp 是 Android 官方 WindowSizeClass 的 compact/medium 分界，也是 7 寸平板的典型宽度。
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val wide = screenWidthDp >= 600
+    val contentBottomInset = if (wide) 24.dp else 86.dp
     GlassBackground(dark = dark) {
-        Box(
+        Row(
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.statusBars)
         ) {
+            if (wide) {
+                GlassNavRail(
+                    tabs = tabs,
+                    selectedIndex = tab,
+                    onSelect = { tab = it },
+                    modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 10.dp)
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .then(if (wide) Modifier.navigationBarsPadding() else Modifier),
+                contentAlignment = Alignment.TopCenter
+            ) {
             AnimatedContent(
                 targetState = tab,
                 transitionSpec = {
@@ -268,7 +294,10 @@ private fun AppShell(
                         )
                 },
                 label = "pageSwitch",
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .widthIn(max = 1180.dp)
+                    .fillMaxWidth()
             ) { index ->
                 when (index) {
                     0 -> HomeScreen(
@@ -276,37 +305,40 @@ private fun AppShell(
                         settingViewModel = settingViewModel,
                         onOpenRecords = { tab = 1 },
                         onOpenSettings = { tab = 4 },
-                        bottomInset = 86.dp
+                        bottomInset = contentBottomInset
                     )
-                    1 -> RecordsScreen(viewModel = viewModel, bottomInset = 86.dp)
-                    2 -> BtScreen(viewModel = btViewModel, bottomInset = 86.dp)
+                    1 -> RecordsScreen(viewModel = viewModel, bottomInset = contentBottomInset)
+                    2 -> BtScreen(viewModel = btViewModel, bottomInset = contentBottomInset)
                     3 -> PluginScreen(
                         viewModel = pluginViewModel,
                         onMessage = viewModel::notifyMessage,
-                        bottomInset = 86.dp
+                        bottomInset = contentBottomInset
                     )
                     else -> SettingScreen(
                         viewModel = viewModel,
                         settingViewModel = settingViewModel,
-                        bottomInset = 86.dp
+                        bottomInset = contentBottomInset
                     )
                 }
             }
-            GlassBottomBar(
-                tabs = tabs,
-                selectedIndex = tab,
-                onSelect = { tab = it },
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .navigationBarsPadding()
-                    .padding(bottom = 10.dp)
-            )
+            if (!wide) {
+                GlassBottomBar(
+                    tabs = tabs,
+                    selectedIndex = tab,
+                    onSelect = { tab = it },
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 10.dp)
+                )
+            }
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 96.dp)
+                    .padding(bottom = if (wide) 24.dp else 96.dp)
             )
+            }
         }
         // 挂在 AppShell：首页横幅、设置页权限行、启动失败都复用同一个向导
         if (guideVisible) {

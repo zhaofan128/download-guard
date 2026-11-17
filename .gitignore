@@ -19,3 +19,7 @@ keystore/*.jks
 
 # 构建产物（安装包走 Releases，不入库）
 /dist/
+
+# 桌面版构建产物
+desktop/build/
+desktop/native/

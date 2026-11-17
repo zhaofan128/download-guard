@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0c12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f5f6fb" media="(prefers-color-scheme: light)">
+<meta name="description" content="DownloadGuard 桌面版：多连接下载、断点续传、HLS、BT/磁力，下载完自动校验 SHA-256 与 APK 签名。">
+<title>DownloadGuard</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12.5 5 5L20 6.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l13-7.5z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/><path d="M10 11v5M14 11v5"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h8"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8"/><path d="M19 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M2.5 8.5a15 15 0 0 1 19 0M6 12a10 10 0 0 1 12 0M9.5 15.5a5 5 0 0 1 5 0"/><circle cx="12" cy="19" r="1"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 4.4 3 7.6 7 9 4-1.4 7-4.6 7-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2.5 20h19z"/><path d="M12 9v5M12 17.5v.5"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6"/><path d="M20 5v6h-6"/></symbol>
+  <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M6 4v8a6 6 0 0 0 12 0V4"/><path d="M6 9h4M14 9h4"/></symbol>
+  <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></symbol>
+  <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></symbol>
+</svg>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <defs><linearGradient id="bg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7C6BFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs>
+          <rect width="32" height="32" rx="9" fill="url(#bg1)"/>
+          <path d="M16 8v10m0 0 4-4m-4 4-4-4" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          <path d="M9.5 21.5h13" stroke="#fff" stroke-width="2.2" stroke-linecap="round" opacity=".85"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <strong>DownloadGuard</strong>
+        <span>桌面版 <em id="brandVersion">3.0.0</em></span>
+      </div>
+    </div>
+
+    <nav class="nav" aria-label="主导航">
+      <button class="nav-item is-active" data-view="all">
+        <svg><use href="#i-download"/></svg><span>全部任务</span><b id="cntAll">0</b>
+      </button>
+      <button class="nav-item" data-view="active">
+        <svg><use href="#i-zap"/></svg><span>进行中</span><b id="cntActive">0</b>
+      </button>
+      <button class="nav-item" data-view="done">
+        <svg><use href="#i-check"/></svg><span>已完成</span><b id="cntDone">0</b>
+      </button>
+      <button class="nav-item" data-view="settings">
+        <svg><use href="#i-settings"/></svg><span>设置</span>
+      </button>
+    </nav>
+
+    <div class="side-foot">
+      <div class="disk-card">
+        <div class="disk-head">
+          <svg><use href="#i-folder"/></svg><span>保存位置</span>
+        </div>
+        <p class="disk-path" id="sideDir" title="">—</p>
+        <button class="ghost-btn" id="openDirBtn">
+          <svg><use href="#i-external"/></svg>在文件夹中打开
+        </button>
+      </div>
+      <div class="speed-pill" id="sideSpeed">
+        <span class="pulse"></span><b>0 B/s</b><span>总速度</span>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 id="pageTitle">全部任务</h1>
+        <p id="pageSub">多连接、断点续传，下完自动校验</p>
+      </div>
+      <div class="topbar-tools">
+        <label class="search">
+          <svg><use href="#i-search"/></svg>
+          <input id="searchInput" type="search" placeholder="搜索文件名或链接" autocomplete="off" aria-label="搜索任务">
+          <kbd>/</kbd>
+        </label>
+        <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换主题">
+          <svg class="ic-sun"><use href="#i-sun"/></svg>
+          <svg class="ic-moon"><use href="#i-moon"/></svg>
+        </button>
+        <button class="primary-btn" id="newTaskBtn">
+          <svg><use href="#i-plus"/></svg><span>新建下载</span>
+        </button>
+        <button class="primary-btn" id="saveTopBtn" hidden>保存</button>
+      </div>
+    </header>
+
+    <main class="content" id="content">
+      <section id="viewDownloads">
+        <div class="stats">
+          <div class="stat-card stat-speed">
+            <div class="stat-label">实时速度</div>
+            <div class="stat-value" id="statSpeed">0 B/s</div>
+            <svg class="spark" id="spark" viewBox="0 0 120 34" preserveAspectRatio="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="currentColor" stop-opacity=".34"/>
+                  <stop offset="1" stop-color="currentColor" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <path class="spark-area" fill="url(#sparkFill)" d=""></path>
+              <line class="spark-base" x1="0" y1="30" x2="120" y2="30"></line>
+              <path class="spark-line" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d=""></path>
+              <circle class="spark-dot" r="2.6" fill="currentColor" cx="120" cy="30"></circle>
+            </svg>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">进行中</div>
+            <div class="stat-value" id="statActive">0</div>
+            <div class="stat-hint" id="statActiveHint">队列空闲</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">已完成</div>
+            <div class="stat-value" id="statDone">0</div>
+            <div class="stat-hint" id="statDoneHint">累计 0 B</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">已校验</div>
+            <div class="stat-value" id="statConn">0</div>
+            <div class="stat-hint">SHA-256 / 签名</div>
+          </div>
+        </div>
+
+        <div class="list-head">
+          <h2 id="listTitle">任务</h2>
+          <div class="list-tools">
+            <div class="seg-filter" role="tablist" aria-label="筛选">
+              <button class="is-active" data-filter="all">全部</button>
+              <button data-filter="active">进行中</button>
+              <button data-filter="done">已完成</button>
+            </div>
+            <button class="ghost-btn danger" id="clearBtn">清理记录</button>
+          </div>
+        </div>
+
+        <div id="taskList" class="task-list" aria-live="polite"></div>
+
+        <div class="empty" id="emptyState" hidden>
+          <svg viewBox="0 0 220 160" aria-hidden="true">
+            <defs>
+              <linearGradient id="eg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7C6BFF"/><stop offset="1" stop-color="#22D3EE"/></linearGradient>
+            </defs>
+            <rect x="34" y="30" width="152" height="100" rx="16" fill="none" stroke="currentColor" stroke-opacity=".18" stroke-width="2" stroke-dasharray="7 7"/>
+            <path d="M110 48v44m0 0 16-16m-16 16-16-16" stroke="url(#eg)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            <path d="M78 104h64" stroke="url(#eg)" stroke-width="5" stroke-linecap="round"/>
+          </svg>
+          <h3>还没有下载任务</h3>
+          <p>粘贴 HTTP / HLS / 磁力链接，或把 .torrent 文件拖进来</p>
+          <button class="primary-btn" id="emptyNewBtn"><svg><use href="#i-plus"/></svg>新建下载</button>
+        </div>
+      </section>
+
+      <section id="viewSettings" hidden>
+        <div class="settings-grid">
+          <div class="card">
+            <div class="card-head"><h2>下载</h2><p>影响新任务与全局调度</p></div>
+            <label class="field">
+              <span>默认保存目录</span>
+              <div class="input-row">
+                <input id="setDir" type="text" spellcheck="false">
+                <button class="ghost-btn" id="browseBtn"><svg><use href="#i-folder"/></svg>浏览</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>同时下载任务数 <b id="valConcurrent">3</b></span>
+              <input id="setConcurrent" type="range" min="1" max="10" step="1">
+            </label>
+            <label class="field">
+              <span>单任务连接数 <b id="valConn">8</b></span>
+              <input id="setConn" type="range" min="1" max="32" step="1">
+              <small>8～16 对大多数服务器是甜点，过高反而容易被限速</small>
+            </label>
+            <label class="field">
+              <span>全局限速（KB/s，0 为不限）</span>
+              <input id="setLimit" type="number" min="0" step="128" value="0">
+            </label>
+            <label class="switch-row">
+              <span><b>启动时自动续传</b><small>上次没下完的任务自动接着下</small></span>
+              <input type="checkbox" id="setAutoResume" class="switch">
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>网络</h2><p>遇到 403 / 防盗链时很有用</p></div>
+            <label class="field">
+              <span>User-Agent</span>
+              <input id="setUA" type="text" spellcheck="false">
+            </label>
+            <label class="field">
+              <span>Referer</span>
+              <input id="setReferer" type="text" spellcheck="false" placeholder="留空不发送">
+            </label>
+            <label class="field">
+              <span>代理（host:port）</span>
+              <input id="setProxy" type="text" spellcheck="false" placeholder="例如 127.0.0.1:7890">
+            </label>
+            <div class="field">
+              <span>局域网访问</span>
+              <small>开启后手机/平板浏览器可打开同一界面，需重启生效</small>
+              <div class="inline-note" id="lanNote">当前仅本机可访问</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>校验</h2><p>下完先验，再交给系统打开</p></div>
+            <label class="switch-row">
+              <span><b>APK / ZIP 结构检查</b><small>遍历压缩包条目核对 CRC，并识别 v1/v2/v3 签名</small></span>
+              <input type="checkbox" id="setVerifyApk" class="switch">
+            </label>
+            <label class="switch-row">
+              <span><b>校验失败时隔离</b><small>哈希不符的文件移到 quarantine，不污染下载目录</small></span>
+              <input type="checkbox" id="setQuarantine" class="switch">
+            </label>
+            <label class="switch-row">
+              <span><b>HLS 合成 MP4</b><small>检测到 ffmpeg 时无转码封装，失败自动保留 .ts</small></span>
+              <input type="checkbox" id="setHlsRemux" class="switch">
+            </label>
+            <div class="field">
+              <span>aria2c 路径（BT/磁力）</span>
+              <div class="input-row">
+                <input id="setAria2" type="text" spellcheck="false" placeholder="留空自动在 PATH 中查找">
+                <button class="ghost-btn" id="detectAria2">检测</button>
+              </div>
+              <div class="inline-note" id="envAria2">—</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>外观与环境</h2><p>换主题不用重启</p></div>
+            <div class="field">
+              <span>主题</span>
+              <div class="theme-choice" role="radiogroup" aria-label="主题">
+                <button data-theme-choice="auto" class="is-active">跟随系统</button>
+                <button data-theme-choice="light">浅色</button>
+                <button data-theme-choice="dark">深色</button>
+              </div>
+            </div>
+            <div class="env-list">
+              <div><span>版本</span><b id="envVersion">—</b></div>
+              <div><span>运行环境</span><b id="envOs">—</b></div>
+              <div><span>Java</span><b id="envJava">—</b></div>
+              <div><span>数据目录</span><b id="envBase" class="mono">—</b></div>
+              <div id="lanRow"><span>局域网地址</span><b id="envLan">未开启</b></div>
+              <div><span>ffmpeg</span><b id="envFfmpeg">—</b></div>
+            </div>
+            <div class="card-actions">
+              <button class="ghost-btn" id="openDataDir">打开数据目录</button>
+              <button class="ghost-btn" id="resetSettings"><svg><use href="#i-refresh"/></svg>恢复默认</button>
+            </div>
+          </div>
+        </div>
+        <div class="settings-save">
+          <span id="saveHint">修改后记得保存</span>
+          <button class="primary-btn" id="saveSettings">保存设置</button>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<nav class="tabbar" aria-label="底部导航">
+  <button class="is-active" data-view="all"><svg><use href="#i-download"/></svg><span>全部</span></button>
+  <button data-view="active"><svg><use href="#i-zap"/></svg><span>进行中</span></button>
+  <button data-view="done"><svg><use href="#i-check"/></svg><span>已完成</span></button>
+  <button data-view="settings"><svg><use href="#i-settings"/></svg><span>设置</span></button>
+</nav>
+<button class="fab" id="fabBtn" aria-label="新建下载"><svg><use href="#i-plus"/></svg></button>
+
+<div class="scrim" id="scrim"></div>
+
+<div class="sheet" id="newSheet" role="dialog" aria-modal="true" aria-labelledby="newTitle">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <h2 id="newTitle">新建下载</h2>
+      <button class="icon-btn" data-close aria-label="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <form id="newForm">
+      <label class="field">
+        <span>下载链接</span>
+        <textarea id="newUrls" rows="4" placeholder="每行一个链接，支持：&#10;https://example.com/file.zip&#10;https://example.com/video.m3u8&#10;magnet:?xt=urn:btih:..." spellcheck="false" required></textarea>
+        <small>也可以直接把 .torrent 文件拖到窗口里</small>
+      </label>
+      <div class="grid-2">
+        <label class="field">
+          <span>保存目录</span>
+          <div class="input-row">
+            <input id="newDir" type="text" spellcheck="false">
+            <button type="button" class="ghost-btn" id="newBrowse"><svg><use href="#i-folder"/></svg>浏览</button>
+          </div>
+        </label>
+        <label class="field">
+          <span>连接数</span>
+          <input id="newConn" type="number" min="1" max="32" value="8">
+        </label>
+      </div>
+      <label class="field">
+        <span>期望 SHA-256（可选）</span>
+        <input id="newSha" type="text" spellcheck="false" placeholder="填了就严格比对，不符自动隔离">
+      </label>
+      <div class="sheet-actions">
+        <span class="hint" id="newHint"></span>
+        <div>
+          <button type="button" class="ghost-btn" data-close>取消</button>
+          <button type="submit" class="primary-btn"><svg><use href="#i-download"/></svg>开始下载</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="sheet dir-sheet" id="dirSheet" role="dialog" aria-modal="true" aria-labelledby="dirTitle">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <h2 id="dirTitle">选择文件夹</h2>
+      <button class="icon-btn" data-close aria-label="关闭"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="dir-bar">
+      <button class="icon-btn" id="dirUp" aria-label="上一级"><svg><use href="#i-back"/></svg></button>
+      <input id="dirPath" type="text" spellcheck="false" readonly>
+    </div>
+    <div class="dir-list" id="dirList"></div>
+    <div class="sheet-actions">
+      <button class="ghost-btn" data-close>取消</button>
+      <button class="primary-btn" id="dirPick">使用此目录</button>
+    </div>
+  </div>
+</div>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+  <div class="drawer-head">
+    <button class="icon-btn" id="drawerClose" aria-label="关闭详情"><svg><use href="#i-x"/></svg></button>
+    <h2 id="drawerTitle">任务详情</h2>
+    <button class="icon-btn" id="drawerMore" aria-label="更多"><svg><use href="#i-trash"/></svg></button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="assertive"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
