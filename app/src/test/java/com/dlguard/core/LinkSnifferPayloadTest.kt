@@ -1,6 +1,7 @@
 package com.dlguard.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -58,6 +59,12 @@ class LinkSnifferPayloadTest {
         val hits = LinkSniffer.extractUrlsFromPayload(body, base)
         assertEquals(2, hits.size)
         assertEquals(hits.size, hits.map { it.url }.distinct().size)
+    }
+
+    @Test
+    fun `256KB 边界`() {
+        assertFalse(LinkSniffer.payloadTooLarge(262_144))
+        assertTrue(LinkSniffer.payloadTooLarge(262_145))
     }
 
     @Test

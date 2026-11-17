@@ -354,17 +354,49 @@ object LinkSniffer {
      *  - `fetch` 用 clone() 读，绝不消费页面自己要用的那个 Response；
      *  - 全程 try/catch，任何一处失败都不影响页面本身。
      */
+    /** 接口响应体抓取上限：超过就跳过，避免把视频/大 JSON 读进 WebView 内存。 */
+    const val MAX_PAYLOAD_BYTES: Long = 262_144
+
+    /** 声明长度是否已超上限（纯函数，供单测覆盖 256KB 边界）。 */
+    fun payloadTooLarge(declaredLength: Long): Boolean = declaredLength > MAX_PAYLOAD_BYTES
+
     val PAYLOAD_SCRIPT: String = """
         (function () {
           if (window.__dgPayloadHooked) return 'already';
           window.__dgPayloadHooked = true;
+          var MAX = 262144;
           function report(text, base) {
             try {
-              if (!text || text.length > 262144) return;
+              if (!text || text.length > MAX) return;
               if (!/https?:|\.apk|\.zip|\.exe|download/i.test(text)) return;
               if (window.DGJSON && window.DGJSON.onPayload) {
                 window.DGJSON.onPayload(String(text), String(base || location.href));
               }
+            } catch (e) {}
+          }
+          function readCapped(r) {
+            try {
+              var cl = r.headers && r.headers.get && r.headers.get('content-length');
+              // 先看声明长度：超限直接跳过，连 clone 都不读
+              if (cl && Number(cl) > MAX) return;
+              if (!r.clone || !r.body || !r.body.getReader || typeof TextDecoder === 'undefined') {
+                // 没有流式读取能力时宁可不抓，也不把整个响应体拉进 WebView 内存
+                return;
+              }
+              var reader = r.clone().body.getReader();
+              var dec = new TextDecoder();
+              var parts = [];
+              var total = 0;
+              function pump() {
+                reader.read().then(function (res) {
+                  if (res.done) { report(parts.join(''), r.url); return; }
+                  total += res.value ? res.value.byteLength : 0;
+                  if (total > MAX) { try { reader.cancel(); } catch (e) {} return; }
+                  parts.push(dec.decode(res.value, {stream: true}));
+                  pump();
+                }).catch(function () {});
+              }
+              pump();
             } catch (e) {}
           }
           try {
@@ -376,9 +408,7 @@ object LinkSniffer {
                   p.then(function (r) {
                     try {
                       var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
-                      if (r.clone && /json|text/i.test(ct)) {
-                        r.clone().text().then(function (t) { report(t, r.url); }).catch(function () {});
-                      }
+                      if (/json|text/i.test(ct)) readCapped(r);
                     } catch (e) {}
                   }).catch(function () {});
                 } catch (e) {}
@@ -399,9 +429,11 @@ object LinkSniffer {
                 x.addEventListener('load', function () {
                   try {
                     var ct = x.getResponseHeader('content-type') || '';
-                    if (/json|text/i.test(ct)) {
-                      report(x.responseText, x.responseURL || x.__dgUrl);
-                    }
+                    if (!/json|text/i.test(ct)) return;
+                    var cl = x.getResponseHeader('content-length');
+                    // XHR 没有流式读取：没有长度或超过上限就不碰 responseText
+                    if (!cl || Number(cl) > MAX) return;
+                    report(x.responseText, x.responseURL || x.__dgUrl);
                   } catch (e) {}
                 });
               } catch (e) {}
@@ -421,7 +453,7 @@ object LinkSniffer {
      *  - 相对路径：`{"url":"/down/123.apk"}`
      */
     fun extractUrlsFromPayload(text: String, baseUrl: String, limit: Int = 20): List<Candidate> {
-        if (text.isBlank() || text.length > 262_144) return emptyList()
+        if (text.isBlank() || text.length > MAX_PAYLOAD_BYTES) return emptyList()
         val normalized = text.replace("\\/", "/")
         val pattern = Regex("""(?:https?:)?//[^\s"'<>\\]+|/[A-Za-z0-9_\-./%?=&]*(?:down|apk|file)[A-Za-z0-9_\-./%?=&]*""", RegexOption.IGNORE_CASE)
         val out = LinkedHashMap<String, Candidate>()

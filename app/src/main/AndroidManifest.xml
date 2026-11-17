@@ -32,6 +32,11 @@
     <!-- Shizuku 特权通道（管理器持有该权限，Provider 校验用） -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!-- 只允许同签名应用（官方 Xposed 模块）向捕获广播里投递链接 -->
+    <permission
+        android:name="com.dlguard.permission.SEND_CAPTURED_URL"
+        android:protectionLevel="signature" />
+
     <!-- Shizuku 官方要求的包可见性声明（Android 11+）：
          管理器/Sui 包名 + 管理器 provider authority（索取连接、binder 推送链路使用）；
          浏览器列表：插件页「浏览器扩展」需要检测手机里已安装的浏览器 -->
@@ -217,7 +222,8 @@
         <!-- LSPosed 模块回传下载链接（只记录候选，不自动下载） -->
         <receiver
             android:name=".service.CapturedUrlReceiver"
-            android:exported="true">
+            android:exported="true"
+            android:permission="com.dlguard.permission.SEND_CAPTURED_URL">
             <intent-filter>
                 <action android:name="com.dlguard.action.CAPTURED_URL" />
             </intent-filter>

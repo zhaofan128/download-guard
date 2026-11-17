@@ -22,13 +22,34 @@ class CapturedUrlReceiver : BroadcastReceiver() {
         const val EXTRA_URL = "url"
         const val EXTRA_NAME = "name"
         const val EXTRA_SOURCE = "source"
+
+        /** 只接受常见的下载文件类型，避免任意广播把候选列表刷成广告墙。 */
+        private val ALLOWED_EXT = setOf(
+            "apk", "apks", "xapk", "zip", "7z", "rar", "tar", "gz", "xz", "bz2", "iso",
+            "exe", "msi", "dmg", "pkg", "deb", "rpm", "bin", "torrent", "m3u8",
+            "mp4", "mkv", "avi", "mov", "flv", "ts", "mp3", "flac", "wav", "m4a",
+            "pdf", "epub", "doc", "docx", "xls", "xlsx", "ppt", "pptx"
+        )
+
+        /** 纯函数：广播来的 URL 是否值得记录（仍不会自动下载）。 */
+        fun acceptUrl(raw: String?): Boolean {
+            val url = raw?.trim().orEmpty()
+            if (url.isEmpty() || url.length > 4096) return false
+            if (!url.startsWith("http://") && !url.startsWith("https://")) return false
+            if (url.any { it.isWhitespace() || it.code < 0x20 }) return false
+            val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return false
+            // 带 user:pass@ 的地址通常是钓鱼/凭据回传，不记录
+            if (!uri.userInfo.isNullOrEmpty()) return false
+            val path = uri.path.orEmpty().lowercase()
+            val ext = path.substringAfterLast('.', "")
+            return ext in ALLOWED_EXT || path.contains("/download") || path.contains("/down/")
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != ACTION_CAPTURED_URL) return
         val url = intent.getStringExtra(EXTRA_URL)?.trim().orEmpty()
-        if (url.isEmpty() || url.length > 4096) return
-        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        if (!acceptUrl(url)) return
         val name = intent.getStringExtra(EXTRA_NAME)
         val source = intent.getStringExtra(EXTRA_SOURCE)?.take(48) ?: "Xposed 模块"
         val app = context.applicationContext as? DownloadGuardApp ?: return
