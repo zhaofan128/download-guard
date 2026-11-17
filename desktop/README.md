@@ -214,7 +214,7 @@ HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift
 ```bash
 ./build.sh                                   # 编译
 java -jar ../dist/DownloadGuard-Desktop-3.1.0.jar --selftest   # 36 项内置自检
-python3 test/e2e.py                          # 28 项端到端（起真服务器、真下载、真杀进程）
+python3 test/e2e.py                          # 30 项端到端（起真服务器、真下载、真杀进程）
 ```
 
 `test/e2e.py` 覆盖的是单测够不着的那类问题：
