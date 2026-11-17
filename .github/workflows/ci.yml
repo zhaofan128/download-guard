@@ -34,58 +34,10 @@ jobs:
       - name: 配置 Gradle 缓存
         uses: gradle/actions/setup-gradle@v4
 
-      # 发布密钥放在仓库 Secrets 里（base64），有就恢复出来。
-      # 这样 CI 能顺带验证「正式签名包能构建」，维护者也不必在本地装 Android SDK。
-      # 没有 Secrets 时跳过，后面出的包是 debug 签名——CI 不出 Release，不影响用户。
-      - name: 恢复发布密钥
-        if: env.HAS_ANDROID_KEY == 'true'
-        env:
-          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          mkdir -p keystore
-          printf '%s' "$KEYSTORE_B64" | base64 -d > keystore/release.jks
-          {
-            echo "storeFile=keystore/release.jks"
-            echo "storePassword=$KEYSTORE_PASSWORD"
-            echo "keyAlias=$KEY_ALIAS"
-            echo "keyPassword=$KEY_PASSWORD"
-          } > keystore.properties
-          echo "已恢复发布密钥"
-
       # 先出 Debug 包：验签用例需要真实签名的 APK 作为样本，
       # 没有样本它们会 assumeTrue 跳过——跳过不算失败，但会掩盖问题。
       - name: 编译 Debug 包
         run: ./gradlew :app:assembleDebug --console=plain
-
-      # 正式签名包：只用于验证「签名配置没坏」+ 给维护者一个可直接下载的产物。
-      - name: 构建正式签名包
-        if: env.HAS_ANDROID_KEY == 'true'
-        run: ./gradlew :app:assembleRelease --console=plain
-
-      - name: 核对签名证书
-        if: env.HAS_ANDROID_KEY == 'true'
-        run: |
-          set -euo pipefail
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          CERT=$(apksigner verify --print-certs "$APK" | grep 'certificate DN')
-          echo "$CERT"
-          case "$CERT" in
-            *"CN=DownloadGuard"*) echo "签名证书正确" ;;
-            *) echo "签名证书不是发布密钥：$CERT" >&2; exit 1 ;;
-          esac
-
-      - name: 上传正式签名包
-        if: env.HAS_ANDROID_KEY == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: signed-apk
-          path: app/build/outputs/apk/release/*.apk
-          retention-days: 7
-          if-no-files-found: error
 
       - name: 执行 JVM 单元测试
         run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace
@@ -125,6 +77,65 @@ jobs:
           path: app/build/reports/tests/testDebugUnitTest
           retention-days: 7
           if-no-files-found: ignore
+
+      # 发布密钥放在仓库 Secrets 里（base64），有就恢复出来。
+      # 这样 CI 能顺带验证「正式签名包能构建」，维护者也不必在本地装 Android SDK。
+      # 没有 Secrets 时跳过，后面出的包是 debug 签名——CI 不出 Release，不影响用户。
+      - name: 恢复发布密钥
+        if: env.HAS_ANDROID_KEY == 'true'
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p keystore
+          printf '%s' "$KEYSTORE_B64" | base64 -d > keystore/release.jks
+          {
+            echo "storeFile=keystore/release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          echo "已恢复发布密钥"
+
+      # 正式签名包：只用于验证「签名配置没坏」+ 给维护者一个可直接下载的产物。
+      - name: 构建正式签名包
+        if: env.HAS_ANDROID_KEY == 'true'
+        run: ./gradlew :app:assembleRelease --console=plain
+
+      - name: 核对签名证书
+        if: env.HAS_ANDROID_KEY == 'true'
+        run: |
+          set -euo pipefail
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          # apksigner 不在 ubuntu runner 的 PATH 里，只在 SDK 的 build-tools 下，
+          # 所以要自己找。找不到就直接失败，不能跳过核对。
+          APKSIGNER=$(command -v apksigner || true)
+          if [ -z "$APKSIGNER" ]; then
+            APKSIGNER=$(ls "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          fi
+          if [ -z "$APKSIGNER" ]; then
+            echo "找不到 apksigner，无法核对签名" >&2
+            exit 1
+          fi
+          echo "使用 $APKSIGNER"
+          CERT=$("$APKSIGNER" verify --print-certs "$APK" | grep 'certificate DN')
+          echo "$CERT"
+          case "$CERT" in
+            *"CN=DownloadGuard"*) echo "签名证书正确" ;;
+            *) echo "签名证书不是发布密钥：$CERT" >&2; exit 1 ;;
+          esac
+
+      - name: 上传正式签名包
+        if: env.HAS_ANDROID_KEY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 7
+          if-no-files-found: error
 
   desktop:
     name: 桌面版编译 + 自检 + 端到端
