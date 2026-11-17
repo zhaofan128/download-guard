@@ -112,10 +112,17 @@ java -jar DownloadGuard-Desktop-3.2.0.jar --lan
 
 | 包 | 大小 | 适用 |
 | --- | --- | --- |
-| `DownloadGuard-3.2.0-arm64-debug.apk` | 约 25 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
-| `DownloadGuard-3.2.0-universal-debug.apk` | 约 70 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
+| `DownloadGuard-3.2.0-arm64.apk` | 约 25 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
+| `DownloadGuard-3.2.0-universal.apk` | 约 70 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
 
-> **这两个包是 debug 签名**（文件名里的 `-debug` 就是这个意思）。仓库不含正式 keystore，而 debug key 每台机器各自生成，不能当作发布密钥。后果是：如果设备上装的是用别的密钥签的旧版，安装会提示签名冲突，必须先卸载（会清应用数据）。想要正式签名包，把自己的 `keystore.properties`（四个字段：`storeFile` / `storePassword` / `keyAlias` / `keyPassword`）放到仓库根目录后执行 `./gradlew :app:assembleRelease`，`app/build.gradle.kts` 会自动切换到正式签名。证书指纹：`CN=Android Debug`，SHA-256 `5FC51FF2FAB309A3DB49EFEB92A6FA6E5488B4BC793B446FD853126C27FEFA0F`。
+> **签名**：两个包都用项目发布密钥签名（RSA 4096，有效期至 2056 年），不是 debug key。升级安装时如果提示签名冲突，说明设备上装的是更早的、用别的密钥签的版本（3.0.0 及以前），需要卸载一次——之后再升级就不会了。核对证书：
+>
+> ```
+> CN=DownloadGuard, OU=Release, O=DownloadGuard, L=Beijing, ST=Beijing, C=CN
+> SHA-256: 4ED7649E51614FCB213CE56F6E019CCF1C5D87D8BBA3FB2B1A90B346DFCCB67F
+> ```
+>
+> 用 `apksigner verify --print-certs xxx.apk` 可以对上。密钥不入库；维护者的 `keystore.properties` 存在时 `assembleRelease` 自动使用它，不存在时回退 debug 签名（只用于本地验证，不要分发）。
 
 > **装不上先核对字节数**。APK 的签名块在文件末尾，下载中断会留下一个「能识别成 APK、但没有签名」的半截文件，安装器报的就是「安装包没有签名文件」。用文件管理器看属性里的精确大小，和 Release 页面写的字节数对上再装（同一份源码在不同签名与时间戳下会差几 KB，以 Release 页面为准）。
 
@@ -328,7 +335,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.2.0.jar
 
 从 Releases 下载最新的 `DownloadGuard-x.y.z-*.apk`，直接安装。
 
-优先选名字里带 `arm64` 的精简包（25 MB）；提示「应用未安装 / 不兼容」时再换全架构包。安装报「没有签名文件」基本都是文件没下完整，核对字节数后重下即可；报「签名冲突 / 应用未安装」说明设备和这个包不是同一个密钥签的，需要先卸载旧版。
+优先选名字里带 `arm64` 的精简包（25 MB）；提示「应用未安装 / 不兼容」时再换全架构包。安装报「没有签名文件」基本都是文件没下完整，核对字节数后重下即可；报「签名冲突」说明设备上装的是 3.0.0 及以前用别的密钥签的版本，卸载旧版再装（仅一次，之后同密钥升级不再需要）。
 
 装完把浏览器里的下载链接复制过来，或在浏览器里长按链接分享给「浏览器下载接管」。
 
