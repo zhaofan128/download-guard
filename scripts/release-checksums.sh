@@ -22,34 +22,53 @@ fi
 cd dist
 rm -f CHECKSUMS.txt
 shopt -s nullglob
-FILES=("DownloadGuard-Desktop-$VERSION.jar")
-APK_COUNT=0
-for f in DownloadGuard-"$VERSION"-*.apk; do
-  FILES+=("$f")
-  APK_COUNT=$((APK_COUNT + 1))
-done
 
-if [ ! -f "${FILES[0]}" ]; then
-  echo "找不到 ${FILES[0]}" >&2
+# 清单覆盖 dist 下所有发布产物：jar、APK、扩展包、源码快照。
+# 用通配而不是写死文件名，是因为资产组合每次会变（有时带 APK，有时不带），
+# 写死就会漏算——漏算的资产等于没有校验。
+JAR="DownloadGuard-Desktop-$VERSION.jar"
+if [ ! -f "$JAR" ]; then
+  echo "找不到 $JAR" >&2
   exit 1
 fi
 
 # jar 里的 Implementation-Version 必须和文件名一致，否则说明 dist 里躺的是旧包
-JAR_VERSION="$(unzip -p "${FILES[0]}" META-INF/MANIFEST.MF | tr -d '\r' \
+JAR_VERSION="$(unzip -p "$JAR" META-INF/MANIFEST.MF | tr -d '\r' \
   | awk -F': ' '/^Implementation-Version/{print $2}')"
 if [ "$JAR_VERSION" != "$VERSION" ]; then
-  echo "${FILES[0]} 里的版本是 '${JAR_VERSION}'，与 $VERSION 不符" >&2
+  echo "$JAR 里的版本是 '${JAR_VERSION}'，与 $VERSION 不符" >&2
   exit 1
 fi
+
+FILES=()
+APK_COUNT=0
+DEBUG_APK_COUNT=0
+for f in DownloadGuard-*; do
+  [ -f "$f" ] || continue
+  case "$f" in
+    CHECKSUMS.txt) continue ;;
+    *.apk) APK_COUNT=$((APK_COUNT + 1))
+           case "$f" in *-debug.apk) DEBUG_APK_COUNT=$((DEBUG_APK_COUNT + 1)) ;; esac ;;
+  esac
+  FILES+=("$f")
+done
+
+# 排序保证同一批产物每次生成的清单行序一致，方便 diff
+IFS=$'\n' FILES=($(printf '%s\n' "${FILES[@]}" | LC_ALL=C sort)); unset IFS
 
 sha256sum "${FILES[@]}" > CHECKSUMS.txt
 
 if [ "$APK_COUNT" -eq 0 ]; then
-  echo "注意：dist 下没有 DownloadGuard-$VERSION-*.apk，CHECKSUMS.txt 目前只含桌面版 jar。" >&2
+  echo "注意：dist 下没有 APK，CHECKSUMS.txt 目前只含桌面版与扩展包。" >&2
   echo "      Android 包要用正式 keystore 出（./gradlew :app:assembleRelease），" >&2
-  echo "      再改名为 DownloadGuard-$VERSION-arm64.apk / DownloadGuard-$VERSION-universal.apk" >&2
-  echo "      放进 dist 后重跑本脚本，否则这个 Release 的校验清单是不完整的。" >&2
+  echo "      改名成 DownloadGuard-$VERSION-arm64.apk / -universal.apk 放进 dist 后重跑本脚本。" >&2
 fi
 
-echo "已生成 dist/CHECKSUMS.txt（$VERSION，$((APK_COUNT + 1)) 个文件）："
+if [ "$DEBUG_APK_COUNT" -gt 0 ]; then
+  echo "警告：有 $DEBUG_APK_COUNT 个 APK 是 debug 签名（文件名含 -debug）。" >&2
+  echo "      debug key 每台机器不同，用户无法用正式签名包覆盖安装，只能卸载重装。" >&2
+  echo "      正式发布请用维护者 keystore 出包，文件名去掉 -debug。" >&2
+fi
+
+echo "已生成 dist/CHECKSUMS.txt（$VERSION，${#FILES[@]} 个文件）："
 cat CHECKSUMS.txt
