@@ -94,6 +94,10 @@ jobs:
       - name: 内置自检
         run: java -jar dist/DownloadGuard-Desktop-3.0.0.jar --selftest
 
+      # 下载完整性这类问题单测覆盖不到：起真服务器、真下、真杀进程
+      - name: 下载完整性端到端测试
+        run: python3 desktop/test/e2e.py
+
       # 光编译过不算数：真启动一次，确认 HTTP 服务和静态资源都活着
       - name: 启动烟雾测试
         run: |

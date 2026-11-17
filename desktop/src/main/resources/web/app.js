@@ -205,7 +205,7 @@
     arr.shift();
     // 用 1.4 倍峰值做上限：恒定速度时曲线落在中上部，而不是贴着顶边变成一条框
     const max = Math.max(...arr, 1);
-    const ceiling = max * 2.4;
+    const ceiling = max * 1.85;
     const w = 120, h = 34, pad = 4;
     const pts = arr.map((v, i) => [
       (i / (arr.length - 1)) * w,
@@ -259,16 +259,22 @@
     list.hidden = tasks.length === 0;
 
     const existing = new Map($$('.task', list).map((el) => [el.dataset.id, el]));
+    let cursor = list.firstElementChild;
     for (const t of tasks) {
       let el = existing.get(t.id);
       if (!el) {
         el = createTask(t);
-        list.appendChild(el);
+        el.classList.add('enter');   // 只有新卡片播入场动画
+        el.addEventListener('animationend', () => el.classList.remove('enter'), { once: true });
+        list.insertBefore(el, cursor);
       } else {
         existing.delete(t.id);
+        // 位置没变就不要动它：appendChild 会先摘再插，WebKit 会把 CSS 动画重头播一遍，
+        // 结果是每次状态刷新整列卡片都闪一下
+        if (el !== cursor) list.insertBefore(el, cursor);
+        else cursor = cursor.nextElementSibling;
       }
       updateTask(el, t);
-      list.appendChild(el);
     }
     existing.forEach((el) => el.remove());
   }
@@ -541,6 +547,8 @@
     $('#fabBtn').style.display = view === 'settings' ? 'none' : '';
     $('#newTaskBtn').hidden = isSettings;
     $('#saveTopBtn').hidden = !isSettings;
+    // 设置页没有可搜的东西，隐藏搜索框，把移动端顶栏位置让给「保存」
+    document.querySelectorAll('.search').forEach((el) => { el.hidden = isSettings; });
     window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
     renderList();
   }

@@ -9,7 +9,14 @@
 <title>DownloadGuard</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<!-- iOS「添加到主屏幕」：不支持 SVG 图标，必须给 PNG；standalone 让地址栏消失，像个原生 App -->
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="DownloadGuard">
+<meta name="format-detection" content="telephone=no,email=no,address=no">
 <link rel="stylesheet" href="app.css">
 </head>
 <body>

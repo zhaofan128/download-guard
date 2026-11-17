@@ -34,6 +34,7 @@ public final class Task {
     public String signerSubject = "";
     public String gid = "";                // BT 任务在 aria2 里的 id
     public boolean resumeOnStart = false;  // 上次退出时是否正在下载（用于开机自动续传）
+    public transient boolean nameAuto = false;  // 名字是从 URL 猜的，允许被 Content-Disposition 覆盖
     public List<Seg> segs = new ArrayList<>();
 
     // 运行期状态，不落盘

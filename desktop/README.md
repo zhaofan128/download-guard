@@ -54,6 +54,23 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --lan
 
 手机连同一个 WiFi，浏览器打开这行地址即可。令牌是每次启动随机生成的，**没有令牌的请求一律 403**，同一局域网里的其他人打不开。
 
+#### iPhone / iPad
+
+Safari 打开地址后：**分享按钮 → 添加到主屏幕**。得到的图标是全屏无地址栏的独立窗口（已配好 `apple-touch-icon` 与状态栏安全区），观感和原生 App 一致。
+
+两点要接受：
+- 任务跑在电脑上，手机只是遥控器；手机关屏、退出浏览器都不影响下载。
+- iOS 不允许侧载，也没有 JVM，所以 **iPhone 上不装任何东西**——这不是偷懒，是系统限制。
+
+#### 鸿蒙
+
+- **HarmonyOS 4.x 及更早**：兼容 Android 应用，直接装手机端 APK 即可，功能完整。
+- **HarmonyOS NEXT（5.0+）**：已移除 AOSP 兼容层，APK 装不上。用华为浏览器打开上面的局域网地址，同样可以「添加到桌面」。
+
+#### 其他手机
+
+Android 8.0+ 装 APK；能开浏览器的设备（包括 Kindle Fire、智能电视的浏览器）都能访问桌面版，界面按 320px 到 4K 自适应。
+
 ---
 
 ## 二、能做什么
@@ -164,9 +181,29 @@ HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift
 
 ---
 
-## 七、实现取舍
+## 七、测试
 
-- **零第三方依赖**：只用 JDK 自带的 `com.sun.net.httpserver`、`HttpURLConnection`、`ZipFile`、`Cipher`。jar 只有 ~100 KB，不会因为依赖漏洞被迫升级。
+```bash
+./build.sh                                   # 编译
+java -jar ../dist/DownloadGuard-Desktop-3.0.0.jar --selftest   # 22 项内置自检
+python3 test/e2e.py                          # 17 项端到端（起真服务器、真下载、真杀进程）
+```
+
+`test/e2e.py` 覆盖的是单测够不着的那类问题：
+
+| 场景 | 曾经出过的事 |
+| --- | --- |
+| 服务器忽略 Range，暂停再续传 | 服务器返回 200 全量，程序按断点偏移写入，**文件长度对、后半段内容全是错的** |
+| 支持 Range，下载中杀进程重启 | 分段记录与实际字节位置对不上，拼出来是坏文件 |
+| 中文文件名（RFC 5987） | 落地成 `download` 或 `%E4%B8%AD...` |
+
+CI 里和编译、自检、启动烟雾测试一起跑，失败即红。
+
+---
+
+## 八、实现取舍
+
+- **零第三方依赖**：只用 JDK 自带的 `com.sun.net.httpserver`、`HttpURLConnection`、`ZipFile`、`Cipher`。jar 只有 ~150 KB（含图标），不会因为依赖漏洞被迫升级。
 - **Java 11 字节码**：`--release 11`，Windows 7 + JRE 11 也能跑；没有用 record / 密封类这些新语法。
 - **前端零构建**：一个 `index.html` + `app.css` + `app.js`，没有 npm、没有打包器，改一行刷新就生效。
 - **状态推送用 SSE**：比轮询省电，比 WebSocket 简单；断线自动重连，另有 1.5 秒轮询兜底。

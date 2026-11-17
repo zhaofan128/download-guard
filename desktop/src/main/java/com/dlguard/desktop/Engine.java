@@ -171,6 +171,7 @@ public final class Engine {
         t.expectedSha256 = expectedSha == null ? "" : expectedSha.trim().toLowerCase(Locale.ROOT);
         t.kind = u.startsWith("magnet:") ? "BT" : (u.toLowerCase(Locale.ROOT).contains(".m3u8") ? "HLS" : "HTTP");
         t.name = u.startsWith("magnet:") ? Torrent.displayName(u) : Util.nameFromUrl(u);
+        t.nameAuto = !u.startsWith("magnet:");
         t.status = "queued";
         tasks.add(t);
         index.put(t.id, t);
@@ -460,6 +461,7 @@ public final class Engine {
 
     private void fetchSegment(Task t, Task.Seg seg, RandomAccessFile raf) throws Exception {
         int attempt = 0;
+        int restarts = 0;
         byte[] buf = new byte[128 * 1024];
         while (seg.done < seg.length()) {
             if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
@@ -478,6 +480,16 @@ public final class Engine {
                 String msg = DownloadErrors.forHttp(code, t.url);
                 c.disconnect();
                 throw new IOException(msg);
+            }
+            if (code == 200 && seg.done > 0) {
+                // 服务器忽略了 Range，直接给了完整文件：数据是从第 0 字节开始的。
+                // 若还按 seg.done 的位置写，文件前半段是新的、后半段是旧数据，长度对但内容是错的。
+                // 这种服务器本来就不支持续传，只能从头写一遍。
+                if (++restarts > 3) {
+                    c.disconnect();
+                    throw new IOException("服务器不支持断点续传，且连接反复中断，请换个网络环境重试");
+                }
+                seg.done = 0;
             }
             long written = 0;
             try (InputStream in = c.getInputStream()) {
@@ -585,8 +597,11 @@ public final class Engine {
 
     private void applyProbe(Task t, Probe p) {
         if (p.size > 0) t.size = p.size;
-        if (p.name != null && !p.name.isEmpty() && (t.name.isEmpty() || t.name.startsWith("download"))) {
+        // Content-Disposition 的优先级高于 URL 里的猜测名：很多下载站 URL 是 file.php?id=123
+        if (p.name != null && !p.name.isEmpty()
+                && (t.name.isEmpty() || t.nameAuto || t.name.startsWith("download"))) {
             t.name = p.name;
+            t.nameAuto = false;
         }
         t.name = Util.sanitizeName(t.name, "download");
         t.rangeSupported = p.range;

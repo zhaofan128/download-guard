@@ -1,6 +1,7 @@
 /* 只缓存静态外壳；接口与事件流一律走网络，避免看到过期的任务状态。 */
-const CACHE = 'dg-shell-v3';
-const ASSETS = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest', './icon.svg'];
+const CACHE = 'dg-shell-v4';
+const ASSETS = ['./', './index.html', './app.css', './app.js', './manifest.webmanifest',
+  './icon.svg', './icon-192.png', './icon-512.png', './apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
