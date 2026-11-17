@@ -133,7 +133,7 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
 
-桌面版 jar 是**可复现构建**：同一份源码、同一个 JDK 大版本，打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01，并按字典序写 zip 条目；CI 每次都会连打两次比对哈希）。所以你可以自己从 tag 构建一遍再核对：
+桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。JDK 17（CI）与 JDK 20（本地）实测得到同一个 SHA-256，所以 JDK 版本差异不影响结果。你可以自己从 tag 构建一遍再核对：
 
 ```bash
 git checkout v3.1.1 && cd desktop && ./build.sh
