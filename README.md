@@ -32,7 +32,7 @@
 
 这张表会随着能力变化更新，不写「理论上支持」。
 
-桌面版另有 **54 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、Host/Origin 判定、目录白名单与软链逃逸、分段重试预算、Content-Range 起点、真实签名 APK 的 **v2 验签**、篡改/去签名拒绝、证书指纹提取。CI 里提供真实样本，0 跳过。
+桌面版另有 **63 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、Host/Origin 判定、目录白名单与软链逃逸、分段重试预算、Content-Range 起点、真实签名 APK 的 **v2 验签**、篡改/去签名拒绝、证书指纹提取。CI 里提供真实样本，0 跳过。
 
 再加 **99 项端到端检查**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传不能错位、支持 Range 时杀进程重启必须字节一致、1MB chunked 不能变 1 字节、截断响应必须失败、跨站请求/无令牌/白名单外目录必须被拒、HLS 半截分片与清单变更、`part` 缺失与 `tasks.json` 损坏、20 个 SSE 连接不拖垮 API、真实 APK 验签与篡改隔离。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 真实下载 smoke test。
 
@@ -64,7 +64,7 @@
 
 ### 那这两类设备怎么用
 
-**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.0.jar --lan`，终端会打印一个带随机令牌的地址：
+**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.1.jar --lan`，终端会打印一个带随机令牌的地址：
 
 ```
 http://192.168.1.5:8765/?token=8f3c2a...
@@ -99,7 +99,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 想让手机、平板用同一套界面：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.2.0.jar --lan
+java -jar DownloadGuard-Desktop-3.2.1.jar --lan
 ```
 
 终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
@@ -137,7 +137,7 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 或者让脚本代劳（需要 `gh` 已登录，下载到临时目录后逐项比对）：
 
 ```bash
-./scripts/verify-release.sh v3.2.0
+./scripts/verify-release.sh v3.2.1
 ```
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
@@ -145,8 +145,8 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。JDK 17（CI）与 JDK 20（本地）实测得到同一个 SHA-256，所以 JDK 版本差异不影响结果。你可以自己从 tag 构建一遍再核对：
 
 ```bash
-git checkout v3.2.0 && cd desktop && ./build.sh
-sha256sum ../dist/DownloadGuard-Desktop-3.2.0.jar
+git checkout v3.2.1 && cd desktop && ./build.sh
+sha256sum ../dist/DownloadGuard-Desktop-3.2.1.jar
 # 与 CHECKSUMS.txt 里那一行对比，一致就说明这份 jar 确实由这个 tag 的源码产出
 ```
 
@@ -367,8 +367,8 @@ cd download-guard
 ./gradlew :app:testDebugUnitTest      # 全部单元测试（185 个用例 / 32 个测试类）
 
 cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
-java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.0.jar --selftest   # 54 项内置自检
-java -jar dist/DownloadGuard-Desktop-3.2.0.jar              # 启动电脑版
+java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.1.jar --selftest   # 63 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.2.1.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
