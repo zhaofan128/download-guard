@@ -25,6 +25,12 @@ android {
 
         vectorDrawables { useSupportLibrary = true }
         resourceConfigurations += listOf("zh", "en")
+
+        // 默认打全架构；出精简包时用 -Pabi=arm64-v8a，
+        // 体积从 73MB 降到 25MB 左右，手机端下载不容易中途断掉。
+        (project.findProperty("abi") as String?)?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { list -> ndk { abiFilters += list } }
     }
 
     signingConfigs {
