@@ -111,11 +111,11 @@ jobs:
         run: |
           set -o pipefail
           java -Ddg.apk=desktop/test/fixtures/signed.apk \
-            -jar dist/DownloadGuard-Desktop-3.1.1.jar --selftest | tee /tmp/selftest.log
+            -jar dist/DownloadGuard-Desktop-3.2.0.jar --selftest | tee /tmp/selftest.log
           grep -q '0 跳过' /tmp/selftest.log || { echo "自检出现跳过用例"; exit 1; }
 
       # 下载完整性这类问题单测覆盖不到：起真服务器、真下、真杀进程
-      - name: 下载完整性端到端测试（76 项检查）
+      - name: 下载完整性端到端测试（99 项检查）
         run: python3 desktop/test/e2e.py
 
       # 光编译过不算数：真启动、带令牌请求、真下载一次并核对 SHA-256
@@ -130,7 +130,7 @@ jobs:
           head -c 1048576 /dev/urandom > "$SRC/smoke.bin"
           (cd "$SRC" && exec python3 -m http.server 8898 --bind 127.0.0.1 >/dev/null 2>&1) &
           SRV_PID=$!
-          java -jar dist/DownloadGuard-Desktop-3.1.1.jar --port 8899 --no-browser \
+          java -jar dist/DownloadGuard-Desktop-3.2.0.jar --port 8899 --no-browser \
             --home "$HOME_DIR" --dir "$OUT" > /tmp/dg.log 2>&1 &
           APP_PID=$!
           cleanup() { kill "$APP_PID" "$SRV_PID" 2>/dev/null || true; }
@@ -146,7 +146,7 @@ jobs:
           done
           cat /tmp/ver.json || true
           [ -n "$TOKEN" ] || { echo "没有读到访问令牌"; cat /tmp/dg.log; exit 1; }
-          grep -q '3.1.1' /tmp/ver.json
+          grep -q '3.2.0' /tmp/ver.json
 
           # 无令牌必须 403，带 Cookie 才能打开页面
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8899/)" = "403" ]

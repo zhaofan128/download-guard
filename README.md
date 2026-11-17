@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
-一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 补上「全部暂停 / 全部继续」、电脑版命令行投递，并把本机服务对浏览器的信任边界收紧。
+一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
@@ -15,7 +15,7 @@
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
 - 电脑版：纯 Java 11 实现，**零第三方依赖**，一个 106 KB 的 jar；界面用系统浏览器渲染，手机/平板连同一 WiFi 也能打开（`--lan`，带随机令牌）
-- **180 个 JVM 单元测试、32 个测试类，CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
+- **185 个 JVM 单元测试、32 个测试类，CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
 - 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、磁力链接解析、BT 状态映射与限速展示、真实 APK 的 v2 签名摘要重算
 
 ## 它做不到什么（先看这里，比看功能列表省时间）
@@ -34,9 +34,9 @@
 
 桌面版另有 **54 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、Host/Origin 判定、目录白名单与软链逃逸、分段重试预算、Content-Range 起点、真实签名 APK 的 **v2 验签**、篡改/去签名拒绝、证书指纹提取。CI 里提供真实样本，0 跳过。
 
-再加 **76 项端到端检查**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传不能错位、支持 Range 时杀进程重启必须字节一致、1MB chunked 不能变 1 字节、截断响应必须失败、跨站请求/无令牌/白名单外目录必须被拒、HLS 半截分片与清单变更、`part` 缺失与 `tasks.json` 损坏、20 个 SSE 连接不拖垮 API、真实 APK 验签与篡改隔离。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 真实下载 smoke test。
+再加 **99 项端到端检查**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传不能错位、支持 Range 时杀进程重启必须字节一致、1MB chunked 不能变 1 字节、截断响应必须失败、跨站请求/无令牌/白名单外目录必须被拒、HLS 半截分片与清单变更、`part` 缺失与 `tasks.json` 损坏、20 个 SSE 连接不拖垮 API、真实 APK 验签与篡改隔离。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 真实下载 smoke test。
 
-关于测试的实话：180 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
+关于测试的实话：185 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
 
 ## 哪些系统能用
 
@@ -64,7 +64,7 @@
 
 ### 那这两类设备怎么用
 
-**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.1.1.jar --lan`，终端会打印一个带随机令牌的地址：
+**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.0.jar --lan`，终端会打印一个带随机令牌的地址：
 
 ```
 http://192.168.1.5:8765/?token=8f3c2a...
@@ -82,11 +82,11 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 **[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
 
-3.1.1 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
+3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
 
 ### 电脑版（Windows / macOS / Linux）
 
-下载 `DownloadGuard-Desktop-3.1.1.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
+下载 `DownloadGuard-Desktop-3.2.0.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
 
 | 系统 | 启动方式 |
 | --- | --- |
@@ -99,7 +99,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 想让手机、平板用同一套界面：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.1.1.jar --lan
+java -jar DownloadGuard-Desktop-3.2.0.jar --lan
 ```
 
 终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
@@ -108,12 +108,12 @@ java -jar DownloadGuard-Desktop-3.1.1.jar --lan
 
 下载后直接安装。首次启动会引导授予「所有文件访问权限」与「通知权限」，之后把链接粘进来就能用。
 
-3.1.1 同时提供两个包，功能完全一致，只是打包的原生库架构不同：
+3.2.0 同时提供两个包，功能完全一致，只是打包的原生库架构不同：
 
 | 包 | 大小 | 适用 |
 | --- | --- | --- |
-| `DownloadGuard-3.1.1-arm64.apk` | 约 24.4 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
-| `DownloadGuard-3.1.1-universal.apk` | 约 73 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
+| `DownloadGuard-3.2.0-arm64.apk` | 约 24.4 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
+| `DownloadGuard-3.2.0-universal.apk` | 约 73 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
 
 > **装不上先核对字节数**。APK 的签名块在文件末尾，下载中断会留下一个「能识别成 APK、但没有签名」的半截文件，安装器报的就是「安装包没有签名文件」。用文件管理器看属性里的精确大小，和 Release 页面写的字节数对上再装（同一份源码在不同签名与时间戳下会差几 KB，以 Release 页面为准）。
 
@@ -128,7 +128,7 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 或者让脚本代劳（需要 `gh` 已登录，下载到临时目录后逐项比对）：
 
 ```bash
-./scripts/verify-release.sh v3.1.1
+./scripts/verify-release.sh v3.2.0
 ```
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
@@ -136,8 +136,8 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。JDK 17（CI）与 JDK 20（本地）实测得到同一个 SHA-256，所以 JDK 版本差异不影响结果。你可以自己从 tag 构建一遍再核对：
 
 ```bash
-git checkout v3.1.1 && cd desktop && ./build.sh
-sha256sum ../dist/DownloadGuard-Desktop-3.1.1.jar
+git checkout v3.2.0 && cd desktop && ./build.sh
+sha256sum ../dist/DownloadGuard-Desktop-3.2.0.jar
 # 与 CHECKSUMS.txt 里那一行对比，一致就说明这份 jar 确实由这个 tag 的源码产出
 ```
 
@@ -159,6 +159,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.1.1.jar
 - 下载内核是独立的 Java 实现（与 Android 版不共享代码，功能对等）：分段并发、断点续传、全局限速、HLS + AES-128、BT（走本机 aria2c）、SHA-256、**APK v2 验签**、失败文件隔离。
 - 状态推送用 SSE，断线自动重连并有轮询兜底；所有分段进度落盘，进程被杀也能续。
 - 不点界面也能用：`--add <链接> --wait` 投递并等结果，`--status` 看队列，脚本和 CI 不用模拟浏览器点击。
+- **浏览器接管**：设置页下载内置扩展（zip 已打进 jar），加载到 Chrome/Edge 后填一次 8 位配对码。之后网盘网页里点「下载」，扩展会取消浏览器下载，把链接连同 **Referer、登录 Cookie、UA** 一起投递过来——这三样缺一个，网盘直链就是 403 或登录页。扩展只碰「浏览器自己要下的那个文件」，不做资源嗅探、不读页面内容；投递失败会自动把下载还给浏览器，并让该站点冷却 5 分钟。详见 [browser-extension/README.md](browser-extension/README.md)。
 - 纯 Java 11、零第三方依赖：jar 约 190 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
 
 | 能力 | 电脑版 | Android 版 |
@@ -171,7 +172,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.1.1.jar
 | BT / 磁力 | ✅ 需本机 aria2c | ✅ 内置 libtorrent4j |
 | 下载后 SHA-256 计算与基准比对 | ✅ 可填期望值，不符隔离 | ✅ 支持旁挂哈希 |
 | APK v2 签名验签 | ✅ 篡改/去签名直接失败 | ✅ 多级校验；v3-only 标注未验证 |
-| 浏览器下载接管 | ➖ 直接粘贴链接 | ✅ 嗅探 + 无障碍 |
+| 浏览器下载接管 | ✅ 内置扩展，带 Cookie/Referer 投递 | ✅ 嗅探 + 无障碍 |
 | 手机远程使用 | ✅ 浏览器打开，无需安装 | ➖ |
 
 完整说明、参数与常见问题见 [desktop/README.md](desktop/README.md)。
@@ -354,11 +355,11 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 全部单元测试（180 个用例 / 32 个测试类）
+./gradlew :app:testDebugUnitTest      # 全部单元测试（185 个用例 / 32 个测试类）
 
 cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
-java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.1.1.jar --selftest   # 54 项内置自检
-java -jar dist/DownloadGuard-Desktop-3.1.1.jar              # 启动电脑版
+java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.0.jar --selftest   # 54 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.2.0.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -392,7 +393,7 @@ DownloadGuard/
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    180 个 JVM 单元测试（32 个测试类）
+├── app/src/test/    185 个 JVM 单元测试（32 个测试类）
 ├── desktop/         电脑版：纯 Java 11，零依赖，自带 HTTP 服务与响应式 Web UI
 │   ├── src/main/java/com/dlguard/desktop/
 │   │   ├── Engine.java      分段下载、断点续传、队列、全局限速
@@ -423,7 +424,7 @@ DownloadGuard/
 | 链接嗅探 | WebView JS + 无障碍 | 无（直接粘贴链接） | 不适用 |
 | API / 任务模型 | Room + Kotlin 协程 | JSON 文件 + 线程 | 否 |
 
-后果要说清楚：**同一个 bug 可能在两端各修一次；Android 的 180 个单测覆盖不到桌面版**。桌面版靠 `--selftest`（54 项）和 `desktop/test/e2e.py`（76 项检查）兜底，CI 会真实起服务、真下载、真杀进程。短期不强行抽公共 `core/`：两端 IO 模型、生命周期、错误文案都不同，为了「共享」先重写一遍风险更高；真要收敛，按模块迁移并先建 conformance 测试集，而不是一次性重写。
+后果要说清楚：**同一个 bug 可能在两端各修一次；Android 的 185 个单测覆盖不到桌面版**。桌面版靠 `--selftest`（54 项）和 `desktop/test/e2e.py`（99 项检查）兜底，CI 会真实起服务、真下载、真杀进程。短期不强行抽公共 `core/`：两端 IO 模型、生命周期、错误文案都不同，为了「共享」先重写一遍风险更高；真要收敛，按模块迁移并先建 conformance 测试集，而不是一次性重写。
 
 ---
 
@@ -476,7 +477,7 @@ DownloadGuard/
 >
 > **3.1.0** 回到 `x.Y.0`：新增「全部暂停 / 全部继续」（桌面 + Android）与电脑版命令行投递（`--add` / `--status` / `--wait`）。
 >
-> **3.1.1** 是安全与正确性修订：桌面版本机 API 在所有模式下强制令牌 + 双提交头 + Origin/Host 校验 + 保存目录白名单；未知长度/chunked 下载改单流并强制收尾校验；APK 从「只识别签名方案」改为真实 v2 验签，篡改/去签名直接失败；HLS 分片原子落盘 + 清单指纹；断点 meta 与 tasks 对齐，杜绝全零 completed。3.1.0 的 APK 未发布，3.1.1 是第一个带这些修复的发布版本。
+> **3.2.0** 新增浏览器接管（见「电脑版 → 浏览器接管」）。**3.1.1** 是安全与正确性修订：桌面版本机 API 在所有模式下强制令牌 + 双提交头 + Origin/Host 校验 + 保存目录白名单；未知长度/chunked 下载改单流并强制收尾校验；APK 从「只识别签名方案」改为真实 v2 验签，篡改/去签名直接失败；HLS 分片原子落盘 + 清单指纹；断点 meta 与 tasks 对齐，杜绝全零 completed。3.1.0 的 APK 未发布，3.1.1 是第一个带这些修复的发布版本。
 
 ---
 
