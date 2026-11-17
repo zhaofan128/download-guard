@@ -30,7 +30,17 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-JAR = os.path.join(ROOT, "dist", "DownloadGuard-Desktop-3.2.0.jar")
+
+
+def default_jar():
+    # 版本号只写在 Engine.VERSION 一处；e2e 从这里取，发版不用改测试
+    engine = os.path.join(ROOT, "desktop", "src", "main", "java", "com", "dlguard", "desktop", "Engine.java")
+    m = re.search(r'VERSION = "([0-9.]+)"', open(engine, encoding="utf-8").read())
+    assert m, "读不到 Engine.VERSION"
+    return os.path.join(ROOT, "dist", f"DownloadGuard-Desktop-{m.group(1)}.jar")
+
+
+JAR = default_jar()
 SIZE = 24 * 1024 * 1024  # 24 MB，够跨多个 8 MB 边界，又不至于让 CI 太慢
 
 ok_count = 0
@@ -687,8 +697,20 @@ def scenario_truncated(tmp, payload):
             tid = c.add(f"http://127.0.0.1:{port}/trunc.bin", connections=4)
             t = c.wait_done(tid, timeout=60)
             check("截断任务失败而不是完成", t["status"] == "error", f"{t['status']} {t.get('error','')}")
-            check("截断任务有可读错误", "不完整" in (t.get("error") or "") or "中断" in (t.get("error") or ""),
-                  t.get("error", ""))
+            # 断言稳定文案而不是关键词：JDK 17 提前关闭返回 -1、JDK 21/25 抛 Premature EOF，
+            # 不同 JDK 会走 Engine 里不同的重试路径，但最终必须是下面三条归一中文文案之一；
+            # 裸异常透出（IOException/Premature EOF 等）直接判失败
+            err = t.get("error") or ""
+            stable = (
+                "下载不完整" in err
+                or "连接中断" in err
+                or "服务器不支持断点续传" in err
+                or "反复断开" in err
+            )
+            check("截断任务有可读错误", stable, err)
+            check("截断任务错误不是裸异常",
+                  "IOException" not in err and "Premature EOF" not in err and "unexpected end" not in err.lower(),
+                  err)
             check("截断文件没有落地", not [n for n in os.listdir(out) if n.startswith("trunc")],
                   str(os.listdir(out)))
         finally:

@@ -4,7 +4,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-VERSION="3.2.0"
+# 版本号只写在 Engine.VERSION 一处，jar 名与清单从这里取，发版不用改脚本
+VERSION="$(grep -oP 'VERSION = "\K[0-9.]+' src/main/java/com/dlguard/desktop/Engine.java)"
+[ -n "$VERSION" ] || { echo "读不到 Engine.VERSION" >&2; exit 1; }
 OUT="build"
 DIST="../dist"
 CLASSES="$OUT/classes"

@@ -175,8 +175,8 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "自动接收网盘下载",
-                    subtitle = "浏览器或网盘 App 里点下载时直接建任务（需要 LSPosed 模块）；" +
-                        "系统下载器那份不会自动取消，介意的话保持关闭，用候选列表手动确认",
+                    subtitle = "网盘 App 走系统下载器时直接建任务，接管成功后自动删掉系统那份（需要 LSPosed 模块）；" +
+                        "浏览器内置下载器无法从外部取消，只进候选列表不自动下载，用候选列表手动确认",
                     checked = settings.autoIntake,
                     hapticEnabled = settings.haptics,
                     onCheckedChange = settingViewModel::setAutoIntake

@@ -219,7 +219,9 @@
             </intent-filter>
         </receiver>
 
-        <!-- LSPosed 模块回传下载链接（只记录候选，不自动下载） -->
+        <!-- LSPosed 模块回传下载链接：宿主没有 signature 权限，先发模块 relay
+             （com.dlguard.xposed 的 RelayReceiver，同发布密钥签名），模块再转发到这里。
+             收到后只记录候选；autoIntake 开启且 kind=dm 才自动建任务并回发确认。 -->
         <receiver
             android:name=".service.CapturedUrlReceiver"
             android:exported="true"

@@ -8,7 +8,7 @@
  *
  * 不做资源嗅探、不读页面内容、不记录浏览历史：扩展拿到的只有「浏览器自己要下的那个文件」。
  *
- * 与 DownloadGuard 的协议（本机回环，端口区间 37650-37659）：
+ * 与 DownloadGuard 的协议（本机回环，端口区间 8765-8794，与桌面版默认端口一致）：
  *   GET  /api/hook/ping   → { app:"dlguard", api:1, paired:bool, needPair:bool }
  *   POST /api/hook/pair   → { code:"12345678" } → { ok, token }
  *   POST /api/hook        → X-DG-Hook-Token: <token> + JSON 载荷 → { ok, id, name }
@@ -16,12 +16,16 @@
  * 为什么需要配对码：本机端口对任何扩展都是可达的，只靠「Origin 是 chrome-extension://」
  * 无法区分「用户自己装的 DownloadGuard 扩展」和「随便一个扩展」。配对码只显示在
  * DownloadGuard 的设置页，等于用户显式授权。
+ *
+ * 端口范围为什么是 8765-8794：桌面版默认监听 8765（Settings.port），被占用时
+ * 从 8765 起顺延最多 30 个端口，即 8765-8794。扩展必须先试用户手动填的端口
+ * （popup → 高级），再扫这个范围，否则永远连不上默认启动的服务。
  */
 
 'use strict';
 
-const PORT_START = 37650;
-const PORT_END = 37659;
+const PORT_START = 8765;
+const PORT_END = 8794;
 const COOLDOWN_MS = 5 * 60 * 1000;
 const MAX_RECENT = 20;
 
@@ -49,7 +53,8 @@ const log = (...a) => console.log('[DownloadGuard]', ...a);
 
 // ---------------------------------------------------------------- 设置
 
-const DEFAULT_SETTINGS = { enabled: true, hijack: true };
+// hijack 默认关：接管所有浏览器下载是有感行为，必须由用户显式开启（配对后弹窗确认）
+const DEFAULT_SETTINGS = { enabled: true, hijack: false, manualPort: 0, skipList: [] };
 
 async function getSettings() {
   const got = await chrome.storage.local.get(DEFAULT_SETTINGS);
@@ -126,21 +131,36 @@ async function clearCooldown(root) {
 async function ensureBridge(force) {
   if (bridge && !force) return bridge;
   bridge = null;
-  for (let p = PORT_START; p <= PORT_END; p++) {
-    try {
-      const r = await fetch('http://127.0.0.1:' + p + '/api/hook/ping', {
-        method: 'GET',
-        cache: 'no-store',
-      });
-      if (!r.ok) continue;
-      const j = await r.json();
-      if (j && j.app === 'dlguard') {
-        bridge = { port: p };
-        return bridge;
-      }
-    } catch (e) {
-      /* 端口没监听，继续 */
+  const st = await getSettings();
+  // 用户手动填的端口优先：改过 --port 的桌面版不在默认区间里
+  if (st.manualPort > 0 && st.manualPort < 65536) {
+    const hit = await probe(st.manualPort);
+    if (hit) {
+      bridge = hit;
+      return bridge;
     }
+  }
+  for (let p = PORT_START; p <= PORT_END; p++) {
+    const hit = await probe(p);
+    if (hit) {
+      bridge = hit;
+      return bridge;
+    }
+  }
+  return null;
+}
+
+async function probe(p) {
+  try {
+    const r = await fetch('http://127.0.0.1:' + p + '/api/hook/ping', {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (j && j.app === 'dlguard') return { port: p };
+  } catch (e) {
+    /* 端口没监听，继续 */
   }
   return null;
 }
@@ -274,6 +294,9 @@ async function onCreated(item) {
     if (!st.enabled || !st.hijack) return;
 
     const root = cooldownRoot(item.referrer || '', url);
+    // 站点跳过名单：命中的站点永远不接管（在 popup 里维护）
+    const skipList = (st.skipList || []).map((s) => String(s).toLowerCase());
+    if (root && skipList.includes(root.toLowerCase())) return;
     if (await isCoolingDown(root)) return;
 
     // 服务没运行就完全不干预：浏览器下载照常
@@ -384,6 +407,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       if (msg.type === 'set') {
         await setSettings(msg.patch || {});
+        sendResponse({ ok: true });
+        return;
+      }
+      if (msg.type === 'reprobe') {
+        // 手动端口变了：作废桥缓存，下次 status 重新探测
+        invalidateBridge();
         sendResponse({ ok: true });
         return;
       }

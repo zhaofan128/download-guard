@@ -1,5 +1,6 @@
 package com.dlguard.desktop;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -131,6 +132,27 @@ public final class SelfTest {
         check("403 提示 Referer", DownloadErrors.forHttp(403, "https://a/b").contains("Referer"), "");
         check("404 说明地址不存在", DownloadErrors.forHttp(404, "https://a/b").contains("404"), "");
         check("429 建议降连接", DownloadErrors.forHttp(429, "https://a/b").contains("连接"), "");
+        // 传输中断必须归一成同一句中文：JDK 17/21/25 对「提前关闭」的底层文案不一样
+        check("JDK25 Premature EOF 是中断", DownloadErrors.isEofLike(new IOException("Premature EOF")), "");
+        check("JDK17 unexpected end 是中断", DownloadErrors.isEofLike(new IOException("unexpected end of file")), "");
+        check("Connection reset 是中断", DownloadErrors.isEofLike(new IOException("Connection reset")), "");
+        check("EOFException 是中断", DownloadErrors.isEofLike(new java.io.EOFException()), "");
+        check("超时不是中断", !DownloadErrors.isEofLike(new java.net.SocketTimeoutException("timed out")), "");
+        check("Premature EOF 转成中文",
+                DownloadErrors.humanize(new IOException("Premature EOF")).equals("连接中断，下载不完整，请重试"),
+                DownloadErrors.humanize(new IOException("Premature EOF")));
+        check("Connection reset 转成中文",
+                DownloadErrors.humanize(new IOException("Connection reset")).equals("连接中断，下载不完整，请重试"),
+                DownloadErrors.humanize(new IOException("Connection reset")));
+        // 分段 worker 的异常经过 Future/RuntimeException 再包一层时，消息会带类名前缀
+        check("带类名前缀的异常剥壳",
+                DownloadErrors.humanize(new IOException("java.io.IOException: 服务器不支持断点续传，请重试"))
+                        .equals("服务器不支持断点续传，请重试"),
+                DownloadErrors.humanize(new IOException("java.io.IOException: 服务器不支持断点续传，请重试")));
+        check("带前缀的 Premature EOF 仍映射",
+                DownloadErrors.humanize(new IOException("java.io.IOException: Premature EOF"))
+                        .equals("连接中断，下载不完整，请重试"),
+                DownloadErrors.humanize(new IOException("java.io.IOException: Premature EOF")));
     }
 
     private static void taskRoundTrip() {

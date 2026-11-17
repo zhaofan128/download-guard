@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 与主 App（com.dlguard）用同一发布密钥签名时，安装即持有该 signature 权限。
+         本模块是宿主进程与主 App 之间的转发站：宿主没有这个权限，
+         直接发广播会被系统丢弃，所以先发给本模块、再由本模块转发。 -->
+    <uses-permission android:name="com.dlguard.permission.SEND_CAPTURED_URL" />
+
     <application
         android:allowBackup="false"
         android:label="下载卫士增强"
@@ -10,10 +15,20 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="在 DownloadManager 登记完成下载与浏览器下载完成回调之前，插入安装包 EOCD/CRC 完整性校验" />
+            android:value="在 DownloadManager 登记完成下载与浏览器下载完成回调之前，插入安装包 EOCD/CRC 完整性校验；并把网盘/浏览器的下载请求回传给主 App" />
         <meta-data
             android:name="xposedminversion"
             android:value="93" />
+
+        <!-- 宿主进程 → 主 App 的转发站：宿主（浏览器/网盘 App）没有 signature 权限，
+             只能把回传数据发给本模块，本模块持有权限后再转发给主 App。 -->
+        <receiver
+            android:name=".RelayReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.dlguard.xposed.action.RELAY" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

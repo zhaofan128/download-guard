@@ -1,8 +1,14 @@
 package com.dlguard.xposed
 
 import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XC_MethodHook
@@ -11,6 +17,7 @@ import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.CRC32
 import java.util.zip.ZipFile
 
@@ -27,7 +34,15 @@ class GuardHook : IXposedHookLoadPackage {
 
     companion object {
         private const val TAG = "[DownloadGuard-Xposed]"
-        private val TARGET_PACKAGES = setOf(
+
+        /** 回传广播发给模块 relay 的包名与确认广播的 action/权限。 */
+        private const val RELAY_PACKAGE = "com.dlguard.xposed"
+        const val ACTION_TAKEOVER_CONFIRM = "com.dlguard.action.TAKEOVER_CONFIRM"
+        private const val SEND_PERMISSION = "com.dlguard.permission.SEND_CAPTURED_URL"
+        private const val CONFIRM_TIMEOUT_MS = 10_000L
+
+        /** RelayReceiver 用它校验「广播确实来自宿主进程」，不可私有。 */
+        val TARGET_PACKAGES = setOf(
             "com.android.chrome",
             "com.chrome.beta",
             "com.chrome.dev",
@@ -44,6 +59,63 @@ class GuardHook : IXposedHookLoadPackage {
             "com.tencent.mobileqq",
             "com.tencent.mm"
         )
+
+        /** 待确认删除的系统下载登记表（顶层确认接收器访问，不可私有）。 */
+        @JvmField
+        val pendingRemovals = ConcurrentHashMap<Long, PendingRemoval>()
+        private val confirmReceiver = HostTakeoverConfirmReceiver()
+        private var confirmRegistered = false
+        private val confirmHandler = Handler(Looper.getMainLooper())
+
+        data class PendingRemoval(val manager: DownloadManager, val registeredAt: Long)
+
+        fun log(message: String) {
+            XposedBridge.log("$TAG $message")
+        }
+
+        fun log(error: Throwable) {
+            XposedBridge.log("$TAG ${error.message}")
+        }
+
+        /**
+         * 在宿主进程里动态注册确认接收器（仅一次）。要求发送者持有
+         * SEND_CAPTURED_URL 权限：只有同一发布密钥签名的主 App / 模块能发确认广播。
+         */
+        fun registerConfirmReceiver(context: Context) {
+            synchronized(confirmReceiver) {
+                if (confirmRegistered) {
+                    sweepExpired()
+                    return
+                }
+                val filter = IntentFilter(ACTION_TAKEOVER_CONFIRM)
+                runCatching {
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        context.applicationContext.registerReceiver(
+                            confirmReceiver, filter, SEND_PERMISSION, null, Context.RECEIVER_EXPORTED
+                        )
+                    } else {
+                        context.applicationContext.registerReceiver(
+                            confirmReceiver, filter, SEND_PERMISSION, null
+                        )
+                    }
+                    confirmRegistered = true
+                    // 10 秒后清理未确认的登记：确认广播早该到了
+                    confirmHandler.postDelayed({
+                        sweepExpired()
+                        if (pendingRemovals.isEmpty()) {
+                            runCatching { context.applicationContext.unregisterReceiver(confirmReceiver) }
+                            confirmRegistered = false
+                        }
+                    }, CONFIRM_TIMEOUT_MS)
+                    log("已注册接管确认接收器")
+                }.onFailure { log("注册确认接收器失败：${it.message}") }
+            }
+        }
+
+        fun sweepExpired() {
+            val now = SystemClock.elapsedRealtime()
+            pendingRemovals.entries.removeIf { now - it.value.registeredAt > CONFIRM_TIMEOUT_MS }
+        }
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -126,6 +198,11 @@ class GuardHook : IXposedHookLoadPackage {
      * 最稳定的「拿到原始 URL」的 hook 点：`WebView.setDownloadListener`。
      * 国产浏览器绝大多数用 WebView 内核，下载开始时会回调 `DownloadListener.onDownloadStart`，
      * 这里把原 listener 包一层，先把 URL/文件名回传给主 App，再原样转发，不改变宿主行为。
+     *
+     * 回传走模块 relay（见 [RelayReceiver]）：宿主进程没有 signature 权限，直接发
+     * 给主 App 会被系统丢弃。WebView 路径标记 kind=webview——浏览器内置下载器
+     * 无法从 Xposed 层取消，主 App 只把它记进候选列表，不会自动建任务（否则同
+     * 一个文件会被下两遍）。
      */
     private fun hookWebViewDownloadListener(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
@@ -140,7 +217,11 @@ class GuardHook : IXposedHookLoadPackage {
                         val context = (param.thisObject as? android.webkit.WebView)?.context ?: return
                         if (original is CapturingDownloadListener) return
                         val view = param.thisObject as? android.webkit.WebView
-                        param.args[0] = CapturingDownloadListener(context, original).also { it.webView = view }
+                        param.args[0] = CapturingDownloadListener(
+                            context,
+                            original,
+                            lpparam.packageName
+                        ).also { it.webView = view }
                     }
                 }
             )
@@ -148,10 +229,11 @@ class GuardHook : IXposedHookLoadPackage {
         }.onFailure { log("WebView 下载监听 hook 失败：${it.message}") }
     }
 
-    /** 把下载开始时的 URL/文件名回传主 App，然后原样调用宿主 listener。 */
+    /** 把下载开始时的 URL/文件名回传主 App（经模块 relay），然后原样调用宿主 listener。 */
     private class CapturingDownloadListener(
         private val context: Context,
-        private val delegate: android.webkit.DownloadListener
+        private val delegate: android.webkit.DownloadListener,
+        private val hostPackage: String
     ) : android.webkit.DownloadListener {
 
         override fun onDownloadStart(
@@ -182,8 +264,8 @@ class GuardHook : IXposedHookLoadPackage {
             if (url.isNullOrBlank()) return
             if (!url.startsWith("http://") && !url.startsWith("https://")) return
             val name = parseFileName(contentDisposition) ?: url.substringAfterLast('/').substringBefore('?')
-            val intent = android.content.Intent("com.dlguard.action.CAPTURED_URL")
-                .setPackage("com.dlguard")
+            val intent = Intent(RelayReceiver.ACTION_RELAY)
+                .setPackage(RELAY_PACKAGE)
                 .putExtra("url", url)
                 .putExtra("name", name.take(200))
                 .putExtra("source", "Xposed·WebView")
@@ -191,8 +273,11 @@ class GuardHook : IXposedHookLoadPackage {
                 .putExtra("userAgent", userAgent?.take(512) ?: "")
                 .putExtra("mime", mime?.take(120) ?: "")
                 .putExtra("length", contentLength)
-                .addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                .putExtra("kind", "webview")
+                .putExtra("hostPackage", hostPackage)
+                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
             runCatching { context.sendBroadcast(intent) }
+                .onFailure { log("WebView 回传广播失败：${it.message}") }
         }
 
         private fun parseFileName(contentDisposition: String?): String? {
@@ -208,8 +293,10 @@ class GuardHook : IXposedHookLoadPackage {
 
     /**
      * 接管系统下载器：网盘 App 里点「下载」很多是直接走 DownloadManager，不经过 WebView
-     * 的 DownloadListener。这里在 enqueue 之后把请求的 URI 与请求头回传主 App，
-     * 并按用户设置决定是否把系统那份删掉（否则同一个文件会下两遍）。
+     * 的 DownloadListener。这里在 enqueue 之后把请求的 URI 与请求头回传主 App（经模块
+     * relay，宿主没有 signature 权限），并在宿主进程里动态注册一个确认接收器：
+     * 主 App 开启「自动接收」且成功建任务后回发确认广播，本模块收到才删除系统那份
+     * 下载——没确认绝不删，避免文件凭空消失。
      */
     private fun hookDownloadManagerEnqueue(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
@@ -231,27 +318,43 @@ class GuardHook : IXposedHookLoadPackage {
                             val headers = runCatching {
                                 XposedHelpers.callMethod(request, "getHeaders") as? Map<String, String>
                             }.getOrNull().orEmpty()
+                            // AOSP 的 DownloadManager.Request 只有私有 mContext，没有公开 getContext()；
+                            // 先反射字段，拿不到再退 ActivityThread.currentApplication()，两个都拿不到就不发广播
                             val context = runCatching {
-                                XposedHelpers.callMethod(request, "getContext") as? Context
+                                XposedHelpers.getObjectField(request, "mContext") as? Context
+                            }.getOrNull() ?: runCatching {
+                                XposedHelpers.callStaticMethod(
+                                    Class.forName("android.app.ActivityThread", false, lpparam.classLoader),
+                                    "currentApplication"
+                                ) as? Context
                             }.getOrNull()
+                            if (context == null) {
+                                log("DownloadManager.enqueue 命中但拿不到 Context（mContext/currentApplication 均失败），仅日志不接管")
+                                return
+                            }
                             val title = runCatching {
                                 XposedHelpers.callMethod(request, "getTitle") as? String
                             }.getOrNull()
-                            val intent = android.content.Intent("com.dlguard.action.CAPTURED_URL")
-                                .setPackage("com.dlguard")
+                            val intent = Intent(RelayReceiver.ACTION_RELAY)
+                                .setPackage(RELAY_PACKAGE)
                                 .putExtra("url", url)
                                 .putExtra("name", (title ?: "").take(200))
                                 .putExtra("source", "Xposed·DownloadManager")
                                 .putExtra("referer", (headers["Referer"] ?: headers["referer"] ?: "").take(4096))
                                 .putExtra("userAgent", (headers["User-Agent"] ?: headers["user-agent"] ?: "").take(512))
                                 .putExtra("cookie", (headers["Cookie"] ?: headers["cookie"] ?: "").take(8192))
-                                .putExtra("takeover", true)
-                                .addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                            val sent = runCatching { context?.sendBroadcast(intent) != null }.getOrDefault(false)
-                            if (!sent) {
-                                // 拿不到 Context 就退化成「只回传」，不删系统下载
-                                log("DownloadManager.enqueue 命中但拿不到 Context，仅回传 URL")
-                            }
+                                .putExtra("kind", "dm")
+                                .putExtra("hostPackage", lpparam.packageName)
+                                .putExtra("dlId", id)
+                                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                            runCatching { context.sendBroadcast(intent) }
+                                .onFailure { log("DownloadManager 回传广播失败：${it.message}") }
+
+                            // 注册确认接收器并登记这个 id：主 App 确认建任务成功后才 remove。
+                            // 宿主进程被杀就收不到确认，系统下载保留——宁可下两遍，不能丢文件。
+                            val manager = param.thisObject as? DownloadManager ?: return
+                            registerConfirmReceiver(context)
+                            pendingRemovals[id] = PendingRemoval(manager, SystemClock.elapsedRealtime())
                             log("接管系统下载 id=$id url=${url.take(80)}")
                         }
                     }
@@ -290,13 +393,21 @@ class GuardHook : IXposedHookLoadPackage {
             }
         }
     }
+}
 
-    private fun log(message: String) {
-        XposedBridge.log("$TAG $message")
-    }
-
-    private fun log(error: Throwable) {
-        XposedBridge.log("$TAG ${error.message}")
+/**
+ * 主 App 确认「已成功建任务」后，删除系统下载器里的那一份。
+ * 必须是顶层类：BroadcastReceiver 由系统实例化，内部类拿不到 GuardHook 的实例成员。
+ */
+class HostTakeoverConfirmReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != GuardHook.ACTION_TAKEOVER_CONFIRM) return
+        val dlId = intent.getLongExtra("dlId", -1L)
+        if (dlId <= 0L) return
+        val pending = GuardHook.pendingRemovals.remove(dlId) ?: return
+        runCatching { pending.manager.remove(dlId) }
+            .onSuccess { GuardHook.log("主 App 已接管，删除系统下载 id=$dlId") }
+            .onFailure { GuardHook.log("删除系统下载 id=$dlId 失败：${it.message}") }
     }
 }
 

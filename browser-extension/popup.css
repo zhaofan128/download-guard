@@ -115,4 +115,9 @@ footer {
   font-size: 11px;
 }
 
+.adv .hint { color: var(--muted); min-height: 0; }
+.adv code { background: var(--line); padding: 0 4px; border-radius: 4px; }
+#confirmBox p { color: var(--fg); font-size: 12.5px; }
+#confirmBox strong { color: var(--accent); }
+
 .hidden { display: none; }

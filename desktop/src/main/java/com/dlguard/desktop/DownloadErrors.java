@@ -34,10 +34,29 @@ public final class DownloadErrors {
         }
     }
 
+    /**
+     * 传输中途断开的异常判断：JDK 17 读到 -1（EOFException 或静默返回），
+     * JDK 21/25 抛 "Premature EOF"。Engine 的读取循环用它把「提前断开」统一
+     * 视同 EOF，走同一套重试与错误文案，跨 JDK 行为一致。
+     */
+    public static boolean isEofLike(Throwable e) {
+        if (e instanceof java.io.EOFException) return true;
+        String m = e.getMessage();
+        if (m == null) return false;
+        String lower = m.toLowerCase(Locale.ROOT);
+        return lower.contains("premature eof")
+                || lower.contains("unexpected end of")
+                || lower.contains("connection reset")
+                || lower.contains("broken pipe");
+    }
+
     public static String humanize(Throwable e) {
         Throwable t = e;
         while (t.getCause() != null && t.getMessage() == null) t = t.getCause();
         String msg = t.getMessage() == null ? t.getClass().getSimpleName() : t.getMessage();
+        // 上游把异常再包一层（如 Future 里的 RuntimeException）时，
+        // getMessage 会带上 "java.io.IOException: " 这类前缀，先剥掉再判断
+        msg = msg.replaceFirst("^(?:[\\w.]+\\.)?[\\w$]+(?:Exception|Error):\\s*", "");
         String lower = msg.toLowerCase(Locale.ROOT);
         if (t instanceof UnknownHostException || lower.contains("unknownhost")) {
             return "域名解析失败，检查网络或 DNS 设置";
@@ -47,6 +66,13 @@ public final class DownloadErrors {
         }
         if (t instanceof SocketTimeoutException || lower.contains("timed out")) {
             return "连接超时，网络不稳定或对方服务器较慢，可稍后重试";
+        }
+        // 传输中途断开：不同 JDK 的文案不一样（JDK 17 是 "unexpected end of file"，
+        // JDK 25 是 "Premature EOF"），必须统一映射，否则用户看到的是听不懂的异常名。
+        if (lower.contains("premature eof") || lower.contains("unexpected end of")
+                || lower.contains("connection reset") || lower.contains("broken pipe")
+                || lower.contains("connect reset") || t instanceof java.io.EOFException) {
+            return "连接中断，下载不完整，请重试";
         }
         if (lower.contains("ssl") || lower.contains("certificate") || lower.contains("pkix")) {
             return "HTTPS 证书校验失败，站点证书可能已过期或不被系统信任";

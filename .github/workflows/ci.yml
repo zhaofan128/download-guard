@@ -39,6 +39,15 @@ jobs:
       - name: 编译 Debug 包
         run: ./gradlew :app:assembleDebug --console=plain
 
+      # Xposed 模块默认不参与构建，但它的编译错误 CI 必须能看到：
+      # 回传链路（RelayReceiver + GuardHook）是 3.2.1 重做的，没这一步等于没有回归网。
+      - name: 编译 Xposed 模块
+        run: ./gradlew -PenableXposed :xposed:assembleDebug --console=plain
+
+      # 扩展端口发现范围与桌面服务默认端口必须一致（3.2.0 就是这里写错导致默认连不上）
+      - name: 端口一致性静态检查（扩展 vs 服务）
+        run: python3 scripts/check-bridge-ports.py
+
       - name: 执行 JVM 单元测试
         run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace
 
@@ -138,17 +147,27 @@ jobs:
           if-no-files-found: error
 
   desktop:
-    name: 桌面版编译 + 自检 + 端到端
+    name: 桌面版编译 + 自检 + 端到端（JDK ${{ matrix.jdk }}）
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # 传输中断的底层文案随 JDK 变化（JDK 17 返回 -1、JDK 25 抛 Premature EOF），
+    # 只在 17 上跑会漏掉回归，两个版本都跑
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: [ '17', '21' ]
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 JDK 17
+      - name: 安装 JDK ${{ matrix.jdk }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ matrix.jdk }}
+
+      # 扩展的端口发现范围必须覆盖服务的默认端口与顺延窗口（3.2.0 就是这里写错导致默认连不上）
+      - name: 端口一致性静态检查（扩展 vs 服务）
+        run: python3 scripts/check-bridge-ports.py
 
       # 桌面版零依赖：javac + jar，不经过 Gradle，也不需要联网
       - name: 编译 jar
@@ -174,11 +193,11 @@ jobs:
         run: |
           set -o pipefail
           java -Ddg.apk=desktop/test/fixtures/signed.apk \
-            -jar dist/DownloadGuard-Desktop-3.2.0.jar --selftest | tee /tmp/selftest.log
+            -jar dist/DownloadGuard-Desktop-*.jar --selftest | tee /tmp/selftest.log
           grep -q '0 跳过' /tmp/selftest.log || { echo "自检出现跳过用例"; exit 1; }
 
       # 下载完整性这类问题单测覆盖不到：起真服务器、真下、真杀进程
-      - name: 下载完整性端到端测试（99 项检查）
+      - name: 下载完整性端到端测试（100 项检查）
         run: python3 desktop/test/e2e.py
 
       # 光编译过不算数：真启动、带令牌请求、真下载一次并核对 SHA-256
@@ -193,7 +212,7 @@ jobs:
           head -c 1048576 /dev/urandom > "$SRC/smoke.bin"
           (cd "$SRC" && exec python3 -m http.server 8898 --bind 127.0.0.1 >/dev/null 2>&1) &
           SRV_PID=$!
-          java -jar dist/DownloadGuard-Desktop-3.2.0.jar --port 8899 --no-browser \
+          java -jar dist/DownloadGuard-Desktop-*.jar --port 8899 --no-browser \
             --home "$HOME_DIR" --dir "$OUT" > /tmp/dg.log 2>&1 &
           APP_PID=$!
           cleanup() { kill "$APP_PID" "$SRV_PID" 2>/dev/null || true; }
@@ -209,7 +228,9 @@ jobs:
           done
           cat /tmp/ver.json || true
           [ -n "$TOKEN" ] || { echo "没有读到访问令牌"; cat /tmp/dg.log; exit 1; }
-          grep -q '3.2.0' /tmp/ver.json
+          # 版本号从 Engine.VERSION 取，不硬编码：发版不再需要改 CI
+          EXPECT_VERSION=$(grep -oP 'VERSION = "\K[0-9.]+' desktop/src/main/java/com/dlguard/desktop/Engine.java)
+          grep -q "\"$EXPECT_VERSION\"" /tmp/ver.json || { echo "版本号与 Engine.VERSION 不一致"; cat /tmp/ver.json; exit 1; }
 
           # 无令牌必须 403，带 Cookie 才能打开页面
           [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8899/)" = "403" ]

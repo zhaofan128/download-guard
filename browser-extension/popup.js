@@ -38,7 +38,42 @@ async function render() {
   if (st.settings) {
     $('enabled').checked = !!st.settings.enabled;
     $('hijack').checked = !!st.settings.hijack;
+    $('manualPort').value = (st.settings.manualPort > 0 ? st.settings.manualPort : '');
   }
+
+  // 站点跳过名单
+  const skipList = (st.settings && st.settings.skipList) || [];
+  $('skipBox').classList.toggle('hidden', skipList.length === 0);
+  const skipUl = $('skipList');
+  skipUl.innerHTML = '';
+  for (const root of skipList) {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = root;
+    const btn = document.createElement('button');
+    btn.textContent = '移除';
+    btn.title = '恢复接管这个站点';
+    btn.onclick = async () => {
+      const next = skipList.filter((s) => s !== root);
+      await send({ type: 'set', patch: { skipList: next } });
+      render();
+    };
+    li.appendChild(name);
+    li.appendChild(btn);
+    skipUl.appendChild(li);
+  }
+  const addBtn = $('addSkip');
+  const addInput = $('skipHost');
+  addBtn.onclick = async () => {
+    const host = addInput.value.trim().toLowerCase();
+    if (!host) return;
+    if (!skipList.includes(host)) {
+      await send({ type: 'set', patch: { skipList: skipList.concat([host]) } });
+    }
+    addInput.value = '';
+    render();
+  };
 
   // 最近投递
   const recent = await send({ type: 'recent' });
@@ -106,6 +141,8 @@ $('pairBtn').onclick = async () => {
   $('pairBtn').disabled = false;
   if (r && r.ok) {
     $('pairHint').textContent = '';
+    // 配对成功后确认是否接管所有浏览器下载（默认不接管）
+    $('confirmBox').classList.remove('hidden');
     render();
   } else {
     const map = {
@@ -117,12 +154,33 @@ $('pairBtn').onclick = async () => {
   }
 };
 
+$('takeYes').onclick = async () => {
+  await send({ type: 'set', patch: { hijack: true } });
+  $('confirmBox').classList.add('hidden');
+  render();
+};
+
+$('takeNo').onclick = async () => {
+  await send({ type: 'set', patch: { hijack: false } });
+  $('confirmBox').classList.add('hidden');
+  render();
+};
+
 $('enabled').onchange = async (e) => {
   await send({ type: 'set', patch: { enabled: e.target.checked } });
 };
 
 $('hijack').onchange = async (e) => {
   await send({ type: 'set', patch: { hijack: e.target.checked } });
+};
+
+$('manualPort').onchange = async (e) => {
+  const v = parseInt(e.target.value, 10);
+  const port = (Number.isFinite(v) && v > 0 && v < 65536) ? v : 0;
+  await send({ type: 'set', patch: { manualPort: port } });
+  // 端口变了，下次状态刷新要重新探测
+  await send({ type: 'reprobe' });
+  render();
 };
 
 $('code').addEventListener('keydown', (e) => {

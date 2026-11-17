@@ -24,6 +24,14 @@
     <p class="hint" id="pairHint"></p>
   </section>
 
+  <section id="confirmBox" class="pair hidden">
+    <p><strong>要不要接管所有浏览器下载？</strong><br>开启后，浏览器里的每次下载都会被取消并交给 DownloadGuard。建议开启；只想在右键菜单里手动用，就选「不接管」。</p>
+    <div class="row">
+      <button id="takeYes">接管</button>
+      <button id="takeNo">不接管</button>
+    </div>
+  </section>
+
   <section class="switches">
     <label class="switch">
       <input type="checkbox" id="enabled">
@@ -35,6 +43,14 @@
     </label>
   </section>
 
+  <section class="adv">
+    <h4>端口（可选）</h4>
+    <p class="hint">桌面版用 <code>--port</code> 改了端口才需要填；默认留空自动扫描 8765–8794。</p>
+    <div class="row">
+      <input id="manualPort" inputmode="numeric" maxlength="5" placeholder="自动（8765–8794）" autocomplete="off">
+    </div>
+  </section>
+
   <section class="recent">
     <h4>最近投递</h4>
     <ul id="list"><li class="empty">还没有记录</li></ul>
@@ -43,6 +59,15 @@
   <section class="cool hidden" id="coolBox">
     <h4>正在冷却的站点</h4>
     <ul id="coolList"></ul>
+  </section>
+
+  <section class="skip hidden" id="skipBox">
+    <h4>不接管的站点</h4>
+    <ul id="skipList"></ul>
+    <div class="row">
+      <input id="skipHost" placeholder="例：pan.baidu.com" autocomplete="off">
+      <button id="addSkip">添加</button>
+    </div>
   </section>
 
   <footer>

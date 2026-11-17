@@ -39,7 +39,7 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.2.0";
+    public static final String VERSION = "3.2.1";
 
     /**
      * 单个分段允许的最大重连次数。
@@ -836,7 +836,15 @@ public final class Engine {
                     raf.seek(written);
                     while (true) {
                         if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
-                        int n = in.read(buf);
+                        int n;
+                        try {
+                            n = in.read(buf);
+                        } catch (IOException e) {
+                            // JDK 17 提前关闭返回 -1，JDK 25 抛 Premature EOF：
+                            // 视同 EOF，走下面统一的「重试/不完整」路径，跨 JDK 文案一致
+                            if (DownloadErrors.isEofLike(e)) break;
+                            throw e;
+                        }
                         if (n < 0) break;
                         limiter.acquire(n);
                         raf.write(buf, 0, n);
@@ -930,7 +938,14 @@ public final class Engine {
             try (InputStream in = c.getInputStream()) {
                 while (seg.done < seg.length()) {
                     if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
-                    int n = in.read(buf, 0, (int) Math.min(buf.length, seg.length() - seg.done));
+                    int n;
+                    try {
+                        n = in.read(buf, 0, (int) Math.min(buf.length, seg.length() - seg.done));
+                    } catch (IOException e) {
+                        // JDK 17 提前关闭返回 -1，JDK 25 抛 Premature EOF：视同 EOF
+                        if (DownloadErrors.isEofLike(e)) break;
+                        throw e;
+                    }
                     if (n < 0) break;
                     limiter.acquire(n);
                     long pos = seg.start + seg.done;

@@ -5,20 +5,29 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.dlguard.DownloadGuardApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * 接收 LSPosed 模块回传的下载链接，并在用户开启「自动接收」时直接建任务。
+ * 接收 LSPosed 模块（经模块 relay）回传的下载链接，并在用户开启「自动接收」时直接建任务。
  *
  * 模块在目标进程里 hook 两处：
- *  1. WebView `DownloadListener` —— 浏览器 / 网盘 App 的内嵌页面点下载；
- *  2. `DownloadManager.enqueue` —— 网盘 App 直接调系统下载器（这条路上拿得到 Cookie）。
+ *  1. WebView `DownloadListener`（kind=webview）—— 浏览器 / 网盘 App 的内嵌页面点下载；
+ *  2. `DownloadManager.enqueue`（kind=dm）—— 网盘 App 直接调系统下载器（这条路上拿得到 Cookie）。
  * 回传内容：URL、文件名、来源页、UA、Cookie、长度。
  *
+ * 自动建任务只在 kind=dm 生效：系统下载器那份可以确认后删除（见下），不会重复下载；
+ * 浏览器内置下载器无法从外部取消，kind=webview 只进候选列表，由用户手动确认。
+ *
+ * kind=dm 且 autoIntake 且建任务成功后，回发 TAKEOVER_CONFIRM 给宿主进程，
+ * 模块侧收到确认才 DownloadManager.remove(id)。没确认绝不删，宁可下两遍不丢文件。
+ *
  * 安全取舍：
- *  - 广播是 signature 级权限，只有同一份 keystore 签出的模块能发；
+ *  - 广播是 signature 级权限，只有同一份 keystore 签出的模块能发（模块转发前还会校验宿主包名）；
  *  - 即使被伪造，也只影响候选列表；真正建任务要求用户显式打开 autoIntake，
  *    且 URL 必须过 [acceptUrl] 的协议 / 长度 / 扩展名判定；
  *  - Cookie 只在内存里传给下载器，不写进候选列表文件。
@@ -27,6 +36,7 @@ class CapturedUrlReceiver : BroadcastReceiver() {
 
     companion object {
         const val ACTION_CAPTURED_URL = "com.dlguard.action.CAPTURED_URL"
+        const val ACTION_TAKEOVER_CONFIRM = "com.dlguard.action.TAKEOVER_CONFIRM"
         const val EXTRA_URL = "url"
         const val EXTRA_NAME = "name"
         const val EXTRA_SOURCE = "source"
@@ -35,6 +45,9 @@ class CapturedUrlReceiver : BroadcastReceiver() {
         const val EXTRA_COOKIE = "cookie"
         const val EXTRA_LENGTH = "length"
         const val EXTRA_MIME = "mime"
+        const val EXTRA_KIND = "kind"
+        const val EXTRA_HOST_PACKAGE = "hostPackage"
+        const val EXTRA_DL_ID = "dlId"
 
         /** 同一 URL 在 5 秒内只接一次：WebView 与 DownloadManager 会重复报同一个文件。 */
         private const val DEDUPE_MS = 5_000L
@@ -113,8 +126,19 @@ class CapturedUrlReceiver : BroadcastReceiver() {
             }
             return true
         }
+
+        /** 纯函数：宿主包名必须是 com.dlguard.xposed 模块已知的宿主（防伪造回执目标）。 */
+        fun validHostPackage(pkg: String?): Boolean {
+            val v = pkg?.trim().orEmpty()
+            return v.isNotEmpty() && v != "com.dlguard" && v != "com.dlguard.xposed" &&
+                v.matches(Regex("[a-zA-Z0-9._]+"))
+        }
     }
 
+    /**
+     * onReceive 是主线程，不能碰 DataStore / 文件 IO——之前无障碍开关的 ANR 就是这么来的。
+     * goAsync() 把广播处理搬到 IO 协程里，10 秒内必须 finish。
+     */
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action != ACTION_CAPTURED_URL) return
         val payload = buildIntake(
@@ -126,7 +150,29 @@ class CapturedUrlReceiver : BroadcastReceiver() {
             cookie = intent.getStringExtra(EXTRA_COOKIE),
             length = intent.getLongExtra(EXTRA_LENGTH, 0L)
         ) ?: return
+        val kind = intent.getStringExtra(EXTRA_KIND) ?: "webview"
+        val hostPackage = intent.getStringExtra(EXTRA_HOST_PACKAGE)
+        val dlId = intent.getLongExtra(EXTRA_DL_ID, -1L)
 
+        val pending = goAsync()
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            try {
+                handle(context, payload, kind, hostPackage, dlId)
+            } catch (t: Throwable) {
+                Log.w("CapturedUrlReceiver", "处理回传失败", t)
+            } finally {
+                pending.finish()
+            }
+        }
+    }
+
+    private suspend fun handle(
+        context: Context,
+        payload: Intake,
+        kind: String,
+        hostPackage: String?,
+        dlId: Long
+    ) {
         val app = context.applicationContext as? DownloadGuardApp ?: return
         app.container.capturedLinks.record(
             url = payload.url,
@@ -137,11 +183,13 @@ class CapturedUrlReceiver : BroadcastReceiver() {
             cookie = payload.cookie,
             size = payload.size
         )
-        Log.i("CapturedUrlReceiver", "收到模块回传链接：${payload.url.take(80)}")
+        Log.i("CapturedUrlReceiver", "收到模块回传链接（$kind）：${payload.url.take(80)}")
 
-        val auto = runCatching {
-            runBlocking { app.container.settings.settings.first().autoIntake }
-        }.getOrDefault(false)
+        // 只有系统下载器（dm）能被确认删除，自动建任务只对这一路生效；
+        // WebView 那路浏览器会自己下载，自动建任务等于同一个文件下两遍。
+        if (kind != "dm") return
+
+        val auto = app.container.settings.settings.first().autoIntake
         if (!auto) return
         if (!firstInWindow(payload.url)) return
 
@@ -152,5 +200,16 @@ class CapturedUrlReceiver : BroadcastReceiver() {
             cookie = payload.cookie
         )
         Log.i("CapturedUrlReceiver", if (added) "已自动加入下载队列" else "自动入队被拒绝")
+        if (!added) return
+
+        // 建任务成功才回发确认：模块侧收到后才删除系统下载器那份。
+        // 宿主进程已死就收不到，系统下载保留（宁可下两遍，不丢文件）。
+        if (dlId > 0L && validHostPackage(hostPackage)) {
+            val confirm = Intent(ACTION_TAKEOVER_CONFIRM)
+                .setPackage(hostPackage)
+                .putExtra(EXTRA_DL_ID, dlId)
+            runCatching { context.sendBroadcast(confirm) }
+                .onFailure { Log.w("CapturedUrlReceiver", "回发接管确认失败：${it.message}") }
+        }
     }
 }
