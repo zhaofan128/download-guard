@@ -30,10 +30,18 @@ class ApkIntegrityChecker(private val context: Context) {
     suspend fun check(
         file: File,
         declaredSize: Long? = null,
+        /**
+         * 逻辑文件名（用户最终看到的那个名字）。
+         *
+         * 下载器边下边校验，磁盘上是 `app.apk.part`；如果按物理文件名取扩展名，
+         * 拿到的是 `part`，L4 APK 解析和 L5 签名校验会被整段跳过 —— 界面照样显示
+         * 「校验通过」，但签名一次都没验过。所以类型判定必须用逻辑名，物理名只用于读字节。
+         */
+        logicalName: String? = null,
         onStage: ((String) -> Unit)? = null
     ): IntegrityResult = withContext(Dispatchers.IO) {
         val startedAt = SystemClock.elapsedRealtime()
-        val extension = file.name.substringAfterLast('.', "").lowercase()
+        val displayName = logicalName?.takeIf { it.isNotBlank() } ?: file.name
 
         fun finish(
             verdict: Verdict,
@@ -80,7 +88,7 @@ class ApkIntegrityChecker(private val context: Context) {
         onStage?.invoke("检查 ZIP 中央目录")
         // 视频 / 音频 / PDF / 图片本来就不是 ZIP，走 EOCD 只会白白判成「非 ZIP 结构」。
         // 过去这里少了这道分流，一个完全正常的 mp4 会被标成「校验失败」，比不校验更糟。
-        if (!IntegrityPolicy.requiresArchiveValidation(file.name, ZipInspector.startsWithZipHeader(file))) {
+        if (!IntegrityPolicy.requiresArchiveValidation(displayName, ZipInspector.startsWithZipHeader(file))) {
             return@withContext finish(
                 Verdict.OK,
                 "非压缩格式，已核对大小（$actualSize 字节）"
@@ -126,9 +134,9 @@ class ApkIntegrityChecker(private val context: Context) {
         coroutineContext.ensureActive()
 
         // L4 / L5 APK 解析与签名
-        if (extension == "apk" || extension == "apks" || extension == "xapk") {
+        if (IntegrityTarget.isInstallerPackage(displayName)) {
             onStage?.invoke("解析 APK 与签名")
-            val probe = if (extension == "apk") {
+            val probe = if (IntegrityTarget.isSingleApk(displayName)) {
                 probeApk(file)
             } else {
                 probeContainer(file)
@@ -146,7 +154,7 @@ class ApkIntegrityChecker(private val context: Context) {
                 )
             }
             // APK 单包：追加 v2 分块摘要 + 验签（v1-only / 算法不支持时如实标注「未验证」）
-            val v2 = if (extension == "apk") ApkSignatureVerifier.verify(file, eocd) else null
+            val v2 = if (IntegrityTarget.isSingleApk(displayName)) ApkSignatureVerifier.verify(file, eocd) else null
             if (v2 is ApkSignatureVerifier.Result.Failed) {
                 return@withContext finish(
                     Verdict.SIGNATURE_ERROR,

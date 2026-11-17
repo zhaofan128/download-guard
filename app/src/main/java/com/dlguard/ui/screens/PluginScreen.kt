@@ -1075,7 +1075,7 @@ private fun BrowserExtensionDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 Text(
-                    text = "装好扩展后，浏览器里的下载会自动改走手机 48 线程引擎，落盘前做完整性校验——电脑端同样适用。",
+                    text = "装好扩展后，浏览器里的下载会自动改走手机的多线程引擎（默认 16 连接、按网络质量自动增减，上限 256），落盘前做完整性校验——电脑端同样适用。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f)
                 )

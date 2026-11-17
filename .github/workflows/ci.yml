@@ -59,6 +59,10 @@ jobs:
               sys.exit(f"只跑到 {total} 个用例（预期 ≥90），判定为测试没有真正执行")
           if failed:
               sys.exit(f"{failed} 个用例失败")
+          # 「零跳过」不能只写在 README 里。CI 先跑 assembleDebug，验签用例一定有样本；
+          # 这里要是出现 skipped，说明样本没生成或有人加了 assumeTrue 兜底，直接红。
+          if skipped:
+              sys.exit(f"{skipped} 个用例被跳过，CI 不允许跳过")
           PY
 
       - name: 上传测试报告

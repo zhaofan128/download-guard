@@ -27,19 +27,21 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 收尾阶段（整文件哈希 + 签名校验 + 落盘）与分片写盘时持有局部唤醒锁，避免 100% 后卡死 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission
-        android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
     <!-- 安装 APK 必需：Android 8+ 缺了它，系统安装器收到 ACTION_VIEW 会静默结束（点了「打开」毫无反应） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Shizuku 特权通道（管理器持有该权限，Provider 校验用） -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- Shizuku 官方要求的包可见性声明（Android 11+）：
          管理器/Sui 包名 + 管理器 provider authority（索取连接、binder 推送链路使用）；
          浏览器列表：插件页「浏览器扩展」需要检测手机里已安装的浏览器 -->
     <queries>
+        <!-- 「打开文件」要能查到任意类型的处理应用。用定向声明而不是 QUERY_ALL_PACKAGES：
+             前者只对 VIEW 请求生效，后者会把用户装了什么全暴露给应用，没必要。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
         <package android:name="moe.shizuku.privileged.api" />
         <package android:name="rikka.suda" />
         <provider android:authorities="rikka.shizuku.manager.MAIN" />

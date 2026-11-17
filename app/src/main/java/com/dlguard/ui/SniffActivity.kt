@@ -14,6 +14,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import android.webkit.JavascriptInterface
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -171,11 +172,31 @@ private fun SniffScreen(
                 useWideViewPort = true
                 loadWithOverviewMode = true
             }
+            // 接口嗅探的落点：页面 JS 把 fetch/XHR 的响应体送进来，这里解析成候选地址。
+            // 只认 @JavascriptInterface 注解的方法，未注解的一律不可见。
+            addJavascriptInterface(object {
+                @JavascriptInterface
+                fun onPayload(text: String?, baseUrl: String?) {
+                    if (text.isNullOrBlank()) return
+                    val base = baseUrl?.takeIf { it.isNotBlank() } ?: pageUrl
+                    val hits = LinkSniffer.extractUrlsFromPayload(text, base)
+                    if (hits.isEmpty()) return
+                    hits.forEach { wireCandidates[it.url] = it }
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        candidatesState.value = LinkSniffer.mergeCandidates(
+                            currentUrl, candidatesState.value, wireCandidates.values
+                        )
+                    }
+                }
+            }, "DGJSON")
+
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                     loading = true
                     progress = 0.08f
                     pageError = null
+                    // 尽早埋点：对「打开就自动拉接口再跳转」的站点，晚了就抓不到那次响应
+                    view.evaluateJavascript(LinkSniffer.PAYLOAD_SCRIPT, null)
                 }
 
                 override fun onReceivedError(
@@ -195,6 +216,9 @@ private fun SniffScreen(
                     loading = false
                     progress = 1f
                     currentUrl = url ?: currentUrl
+                    // 主文档可能已经重建，window 上的钩子随之丢失；幂等脚本再挂一次，
+                    // 用户随后点「下载」触发的 XHR/fetch 就都能被读到
+                    view.evaluateJavascript(LinkSniffer.PAYLOAD_SCRIPT, null)
                     // 动态按钮通常晚于 onPageFinished 渲染，延迟再扫一次
                     view.postDelayed({
                         view.evaluateJavascript(LinkSniffer.SCAN_SCRIPT) { raw ->

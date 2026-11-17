@@ -249,11 +249,13 @@ class DownloadCenter(
             val breakerOn = policy.globalBreaker && host != null
 
             // 全局熔断：同站点任一任务撞过 403/429，新任务进来先把并发压到安全值
-            val cap = if (breakerOn) HostCircuitBreaker.capFor(host!!) else ResumableDownloader.MAX_CONNECTIONS
+            // 不再无脑 256：低内存设备按堆大小降到 32/64，否则光 worker 缓冲就能把进程顶到 LMK
+            val deviceMax = DeviceBudget.maxConnections()
+            val cap = if (breakerOn) HostCircuitBreaker.capFor(host!!) else deviceMax
             // 接力模式下所有流量都挤在一条热点链路上，256 连接只会让网关排队到卡死。
             // 32 条已经能把 2.4G/5G 热点跑满，再高是纯内耗。
             val ceiling = if (com.dlguard.relay.RelayState.active) RELAY_MAX_CONNECTIONS
-            else ResumableDownloader.MAX_CONNECTIONS
+            else deviceMax
             val initial = (settings?.downloadThreads ?: 16).coerceIn(1, ceiling)
                 .coerceAtMost(cap)
             val gate = ResumableDownloader.ConnectionGovernor(initial)
@@ -629,7 +631,7 @@ class DownloadCenter(
         val rt = runtimes[id] ?: return
         rt.userAdjusted = true
         val ceiling = if (com.dlguard.relay.RelayState.active) RELAY_MAX_CONNECTIONS
-        else ResumableDownloader.MAX_CONNECTIONS
+        else DeviceBudget.maxConnections()
         val n = connections.coerceIn(1, ceiling)
         rt.governor?.request(n)
         updateTask(id) { t -> if (t.phase == TaskPhase.RUNNING) t.copy(connections = n) else t }

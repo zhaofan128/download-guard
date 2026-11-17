@@ -71,8 +71,14 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
     /** 领取游标：让并发 worker 分散到不同块，减少同一把锁上的争抢。 */
     private val cursor = java.util.concurrent.atomic.AtomicInteger(0)
 
-    /** 只读视图：下载器持久化元数据与统计进度时遍历使用。 */
-    val chunks: List<Chunk> get() = chunkList
+    /**
+     * 快照视图：下载器持久化元数据与统计进度时遍历使用。
+     *
+     * 不能直接返回 chunkList —— 它是 ArrayList，rebalance 会在别的线程 add。
+     * 调用方在 250ms 进度上报里 for-each 遍历时正好撞上一次拆分，
+     * 就是一次 ConcurrentModificationException，整个任务直接失败。
+     */
+    val chunks: List<Chunk> get() = synchronized(this) { chunkList.toList() }
 
     /**
      * 从断点续传元数据恢复：段区间、已完成字节数原样还原，
@@ -175,7 +181,11 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
                 endInclusive = target.endInclusive,
                 splitDepth = target.splitDepth + 1
             )
-            target.endInclusive = mid
+            // 与写盘循环互斥：worker 正在 write 时不能改边界，否则它按旧边界写出去的
+            // 那 256KB 会越过 mid，与新块重叠、done 重复计数，最终 isComplete() 报「分段未取满」。
+            synchronized(target) {
+                target.endInclusive = mid
+            }
             target.splitDepth += 1
             stolen.owner = workerId
             chunkList.add(stolen)
@@ -201,9 +211,10 @@ class ChunkScheduler(totalBytes: Long, requestedBlocks: Int) {
         }
     }
 
-    fun totalDone(): Long = chunks.sumOf { it.done.get() }
+    /** 必须与 rebalance 的 add 互斥，否则遍历中途扩容会抛 ConcurrentModificationException。 */
+    fun totalDone(): Long = synchronized(this) { chunkList.sumOf { it.done.get() } }
 
-    fun unfinishedCount(): Int = chunks.count { !it.completed }
+    fun unfinishedCount(): Int = synchronized(this) { chunkList.count { !it.completed } }
 
     /** 尾段是否还有「值得再分」的块（供 worker 判断要不要继续等活）。 */
     fun hasSplittableWork(): Boolean = synchronized(this) {

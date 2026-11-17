@@ -106,6 +106,15 @@ class AppContainer(private val context: Context) {
      */
     private val relayAwareClient: OkHttpClient by lazy {
         ResumableDownloader.defaultClient().newBuilder()
+            // 插件页的「IPv4/IPv6 双栈竞速」开关真正生效：关掉就退回系统 DNS。
+            // 用 lambda 延迟读取，避免容器初始化时 pluginManager 与 downloader 互相触发。
+            .dns(
+                com.dlguard.download.SwitchableDns(
+                    enabled = {
+                        pluginManager.isEnabled(com.dlguard.plugin.PluginManager.ID_DUAL_STACK)
+                    }
+                )
+            )
             .proxySelector(object : ProxySelector() {
                 override fun select(uri: URI?): List<Proxy> {
                     if (!RelayState.active) return listOf(Proxy.NO_PROXY)

@@ -37,6 +37,8 @@ object LinkSniffer {
 
     const val ORIGIN_DOM = "dom"
     const val ORIGIN_WIRE = "wire"
+    /** 从接口响应体（JSON / 文本）里解析出来的地址。 */
+    const val ORIGIN_API = "api"
 
     /** 流媒体类型：播放列表交给专用工具，分片单独下没有意义。 */
     enum class StreamKind(val label: String) {
@@ -193,7 +195,8 @@ object LinkSniffer {
             val wireScore = score(candidate.url, candidate.text) + 25
             merged[candidate.url] = candidate.copy(
                 score = maxOf(wireScore, merged[candidate.url]?.score ?: 0),
-                origin = ORIGIN_WIRE
+                // 接口里解析出来的保留 api 来源，界面上才能说清「这条是从返回体里挖到的」
+                origin = if (candidate.origin == ORIGIN_API) ORIGIN_API else ORIGIN_WIRE
             )
         }
         return merged.values.sortedByDescending { it.score }.take(40)
@@ -338,6 +341,114 @@ object LinkSniffer {
           } catch (e) { return ''; }
         })()
     """
+
+    /**
+     * 接口嗅探：钩住 fetch / XHR，读**响应体**里的下载地址。
+     *
+     * 为什么需要它：不少下载站页面上没有链接，点「下载」时前端先请求一个接口，
+     * 拿到 JSON 里的真实地址再 `location.href = data.url`。`shouldInterceptRequest`
+     * 只能看到请求，看不到响应体，这类站点在旧实现里一条候选都抓不到。
+     *
+     * 约束：
+     *  - 只读 json/text 响应，且限制 256KB，避免把视频流整个读进内存；
+     *  - `fetch` 用 clone() 读，绝不消费页面自己要用的那个 Response；
+     *  - 全程 try/catch，任何一处失败都不影响页面本身。
+     */
+    val PAYLOAD_SCRIPT: String = """
+        (function () {
+          if (window.__dgPayloadHooked) return 'already';
+          window.__dgPayloadHooked = true;
+          function report(text, base) {
+            try {
+              if (!text || text.length > 262144) return;
+              if (!/https?:|\.apk|\.zip|\.exe|download/i.test(text)) return;
+              if (window.DGJSON && window.DGJSON.onPayload) {
+                window.DGJSON.onPayload(String(text), String(base || location.href));
+              }
+            } catch (e) {}
+          }
+          try {
+            var of = window.fetch;
+            if (of) {
+              window.fetch = function () {
+                var p = of.apply(this, arguments);
+                try {
+                  p.then(function (r) {
+                    try {
+                      var ct = (r.headers && r.headers.get && r.headers.get('content-type')) || '';
+                      if (r.clone && /json|text/i.test(ct)) {
+                        r.clone().text().then(function (t) { report(t, r.url); }).catch(function () {});
+                      }
+                    } catch (e) {}
+                  }).catch(function () {});
+                } catch (e) {}
+                return p;
+              };
+            }
+          } catch (e) {}
+          try {
+            var oo = XMLHttpRequest.prototype.open;
+            var os = XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.open = function (m, u) {
+              try { this.__dgUrl = u; } catch (e) {}
+              return oo.apply(this, arguments);
+            };
+            XMLHttpRequest.prototype.send = function () {
+              var x = this;
+              try {
+                x.addEventListener('load', function () {
+                  try {
+                    var ct = x.getResponseHeader('content-type') || '';
+                    if (/json|text/i.test(ct)) {
+                      report(x.responseText, x.responseURL || x.__dgUrl);
+                    }
+                  } catch (e) {}
+                });
+              } catch (e) {}
+              return os.apply(this, arguments);
+            };
+          } catch (e) {}
+          return 'ok';
+        })()
+    """.trimIndent()
+
+    /**
+     * 从接口响应体里提取下载地址（纯函数，便于单测）。
+     *
+     * 处理三种常见形态：
+     *  - 标准 JSON：`{"url":"https://x.com/a.apk"}`
+     *  - 转义斜杠：`{"url":"https:\/\/x.com\/a.apk"}`（PHP/Java 序列化常见）
+     *  - 相对路径：`{"url":"/down/123.apk"}`
+     */
+    fun extractUrlsFromPayload(text: String, baseUrl: String, limit: Int = 20): List<Candidate> {
+        if (text.isBlank() || text.length > 262_144) return emptyList()
+        val normalized = text.replace("\\/", "/")
+        val pattern = Regex("""(?:https?:)?//[^\s"'<>\\]+|/[A-Za-z0-9_\-./%?=&]*(?:down|apk|file)[A-Za-z0-9_\-./%?=&]*""", RegexOption.IGNORE_CASE)
+        val out = LinkedHashMap<String, Candidate>()
+        for (match in pattern.findAll(normalized)) {
+            val raw = match.value.trimEnd('.', ',', ')', ']', '}')
+            val absolute = when {
+                raw.startsWith("//") -> "https:$raw"
+                raw.startsWith("/") -> absolutize(baseUrl, raw) ?: continue
+                else -> raw
+            }
+            if (!absolute.startsWith("http", true)) continue
+            // 只保留「像文件」或路径里明确带下载语义的，避免把接口自身的 /api/xxx 也列出来
+            if (!looksLikeFile(absolute) && !absolute.contains("download", true) &&
+                !absolute.contains("apk", true) && !absolute.contains("/down", true)
+            ) continue
+            if (out.size >= limit) break
+            out.getOrPut(absolute) {
+                Candidate(
+                    url = absolute,
+                    text = absolute.substringAfterLast('/').take(80).ifBlank { "接口返回" },
+                    score = score(absolute, "接口返回") + 5,
+                    origin = ORIGIN_API
+                )
+            }
+        }
+        return out.values.toList()
+    }
 
     /** 页面加载完成后延迟再扫一次，给动态渲染的按钮留时间。 */
     const val SCAN_DELAY_MS = 900L

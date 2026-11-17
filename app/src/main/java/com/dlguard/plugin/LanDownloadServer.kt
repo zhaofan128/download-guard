@@ -49,6 +49,10 @@ class LanDownloadServer(
     private val pool = Executors.newFixedThreadPool(4)
     private val running = AtomicBoolean(false)
 
+    /** 鉴权失败计数与窗口起点（防在线爆破）。 */
+    private val authFailures = java.util.concurrent.atomic.AtomicInteger(0)
+    private val authWindowStart = java.util.concurrent.atomic.AtomicLong(0L)
+
     /** 当前生效端口。 */
     val port: Int get() = portProvider().coerceIn(1024, 65535)
 
@@ -163,17 +167,34 @@ class LanDownloadServer(
                     JSONObject()
                         .put("ok", true)
                         .put("name", "DownloadGuard")
-                        .put("version", "1.4.0")
+                        .put("version", com.dlguard.BuildConfig.VERSION_NAME)
                         .put("tokenRequired", true)
                         .toString(),
                     cors = true
                 )
 
                 method == "POST" && path == "/api/download" -> {
-                    if (headers["x-dg-token"] != token) {
+                    val now = System.currentTimeMillis()
+                    if (LanBridgeAuth.isLockedOut(authFailures.get(), authWindowStart.get(), now)) {
+                        respond(
+                            output, 429,
+                            JSONObject().put("ok", false)
+                                .put("error", "token 连续错误次数过多，请等一分钟再试").toString(),
+                            cors = true
+                        )
+                        return
+                    }
+                    // 常量时间比较，避免逐字节计时推测 token
+                    if (!LanBridgeAuth.matches(headers["x-dg-token"], token)) {
+                        val windowStart = LanBridgeAuth.nextWindowStart(authWindowStart.get(), now)
+                        // 先按旧窗口算次数，再落新窗口，否则窗口刚过期时会把旧计数带进来
+                        val count = LanBridgeAuth.nextFailureCount(authFailures.get(), authWindowStart.get(), now)
+                        authWindowStart.set(windowStart)
+                        authFailures.set(count)
                         respond(output, 401, JSONObject().put("ok", false).put("error", "token 不正确").toString(), cors = true)
                         return
                     }
+                    authFailures.set(0)
                     val json = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull()
                     val url = json?.optString("url")?.trim().orEmpty()
                     val name = json?.optString("name")?.trim()?.takeIf { it.isNotBlank() }
@@ -198,9 +219,9 @@ class LanDownloadServer(
                         <html><head><meta charset="utf-8"><title>DownloadGuard 浏览器下载桥</title></head>
                         <body style="font-family:sans-serif;padding:32px;background:#0f172a;color:#e2e8f0">
                         <h2>DownloadGuard 浏览器下载桥</h2>
-                        <p>服务运行中。把浏览器扩展的服务器地址填成：<code>${localAddress() ?: "http://手机IP:$port"}</code></p>
-                        <p>Token：<code>$token</code></p>
-                        <p>POST <code>/api/download</code> 提交 {"url":"…","name":"…"}</p>
+                        <p>服务器地址：<code>${localAddress() ?: "http://手机IP:$port"}</code></p>
+                        <p>${LanBridgeAuth.landingHint(port)}</p>
+                        <p>POST <code>/api/download</code> 提交 {"url":"…","name":"…"}，header 带 <code>X-DG-Token</code></p>
                         </body></html>
                     """.trimIndent()
                     respond(output, 200, html, contentType = "text/html; charset=utf-8", cors = true)

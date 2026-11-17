@@ -953,10 +953,24 @@ class ResumableDownloader(
                         currentCoroutineContext().ensureActive()
                         if (retire.get()) throw RetireRequested()
                         if (limiter.enabled) limiter.acquire(read)
-                        raf.write(buffer, 0, read)
-                        chunk.done.addAndGet(read.toLong())
-                        onBytes(read.toLong())
-                        sinceSync += read
+                        // 与 rebalance 的边界收缩互斥。拿锁后重新读 done/endInclusive：
+                        // 块可能刚被拆走一半，这时按旧边界写会把越界字节也算进 done，
+                        // 与新 owner 的计数重复，最终 isComplete() 报「分段未取满」。
+                        var written = 0
+                        synchronized(chunk) {
+                            val limitNow = chunk.endInclusive
+                            val posNow = start + chunk.done.get()
+                            val writable = minOf(read.toLong(), limitNow - posNow + 1).toInt()
+                            if (writable > 0) {
+                                raf.seek(posNow)
+                                raf.write(buffer, 0, writable)
+                                chunk.done.addAndGet(writable.toLong())
+                                written = writable
+                            }
+                        }
+                        if (written == 0) break // 整段已被偷走，剩下的交给新 owner
+                        onBytes(written.toLong())
+                        sinceSync += written
                     }
                     // 块写入完成：大块强制 fsync（可靠性锚点）；尾段几百 KB 的小块
                     // 不单独 sync，交给全局 ticker 每 4 秒兜底，避免几十次 sync 拖慢收尾。
@@ -1229,14 +1243,28 @@ class ResumableDownloader(
         )
         // 校验是纯 CPU + IO 的重活，期间没有网络包，系统很容易判定「空闲」把进程冻结
         val result = keepAwake.holdSuspend("verify") {
-            checker.check(part, declaredSize ?: downloaded.takeIf { it > 0 })
+            // 关键：磁盘上是 xxx.apk.part，但类型判定必须用最终文件名。
+            // 少了 logicalName，扩展名会取到 "part"，L4/L5 静默跳过，界面还显示「校验通过」。
+            checker.check(
+                part,
+                declaredSize ?: downloaded.takeIf { it > 0 },
+                logicalName = fileName
+            )
         }
         if (!result.healthy) {
-            part.delete()
             DownloadMeta.delete(metaFile)
+            // 不要直接删：删掉等于「文件没了、原因也没了」。移入隔离区，用户还能取回比对。
+            val quarantined = runCatching {
+                com.dlguard.data.QuarantineManager(context).quarantine(part)
+            }.getOrNull()
+            val where = when {
+                quarantined != null -> "分片已移入隔离区：${quarantined.absolutePath}"
+                part.exists() -> "分片保留在：${part.absolutePath}"
+                else -> "分片已清理"
+            }
             return DownloadOutcome(
                 integrity = result,
-                error = "下载完成但校验失败：${result.verdict.label} · ${result.detail}。损坏分片已删除",
+                error = "下载完成但校验失败：${result.verdict.label} · ${result.detail}。$where",
                 url = url
             )
         }
