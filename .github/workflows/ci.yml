@@ -75,9 +75,9 @@ jobs:
           if-no-files-found: ignore
 
   desktop:
-    name: 桌面版编译 + 自检
+    name: 桌面版编译 + 自检 + 端到端
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -91,23 +91,88 @@ jobs:
       - name: 编译 jar
         run: cd desktop && ./build.sh
 
-      - name: 内置自检
-        run: java -jar dist/DownloadGuard-Desktop-3.1.0.jar --selftest
+      # 「可复现」不能只写在 README 里。同一份源码连打两次，字节必须一致，
+      # 否则 Release 上的 CHECKSUMS.txt 对用户没有意义（他下到的包算不出那个哈希）。
+      - name: 可复现构建（两次构建字节一致）
+        run: |
+          set -euo pipefail
+          sha256sum dist/DownloadGuard-Desktop-*.jar > /tmp/hash1.txt
+          cat /tmp/hash1.txt
+          ( cd desktop && ./build.sh > /dev/null )
+          sha256sum dist/DownloadGuard-Desktop-*.jar > /tmp/hash2.txt
+          cat /tmp/hash2.txt
+          if ! diff /tmp/hash1.txt /tmp/hash2.txt; then
+            echo "两次构建的 jar 哈希不一致：build.sh 里的 mtime 或条目顺序没有固定"
+            exit 1
+          fi
+
+      # 必须提供真实签名 APK 样本；skipped 不是「通过」，出现跳过就判红
+      - name: 内置自检（真实 APK 验签，0 跳过）
+        run: |
+          set -o pipefail
+          java -Ddg.apk=desktop/test/fixtures/signed.apk \
+            -jar dist/DownloadGuard-Desktop-3.1.1.jar --selftest | tee /tmp/selftest.log
+          grep -q '0 跳过' /tmp/selftest.log || { echo "自检出现跳过用例"; exit 1; }
 
       # 下载完整性这类问题单测覆盖不到：起真服务器、真下、真杀进程
-      - name: 下载完整性端到端测试
+      - name: 下载完整性端到端测试（76 项检查）
         run: python3 desktop/test/e2e.py
 
-      # 光编译过不算数：真启动一次，确认 HTTP 服务和静态资源都活着
-      - name: 启动烟雾测试
+      # 光编译过不算数：真启动、带令牌请求、真下载一次并核对 SHA-256
+      - name: 启动 + 真实下载烟雾测试
         run: |
-          java -jar dist/DownloadGuard-Desktop-3.1.0.jar --port 8899 --no-browser --dir /tmp/dg > /tmp/dg.log 2>&1 &
-          ok=0
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8899/api/version > /tmp/ver.json; then ok=1; break; fi
-            sleep 1
+          set -euo pipefail
+          HOME_DIR=/tmp/dg-home
+          OUT=/tmp/dg-out
+          SRC=/tmp/dg-src
+          rm -rf "$HOME_DIR" "$OUT" "$SRC"
+          mkdir -p "$OUT" "$SRC"
+          head -c 1048576 /dev/urandom > "$SRC/smoke.bin"
+          (cd "$SRC" && exec python3 -m http.server 8898 --bind 127.0.0.1 >/dev/null 2>&1) &
+          SRV_PID=$!
+          java -jar dist/DownloadGuard-Desktop-3.1.1.jar --port 8899 --no-browser \
+            --home "$HOME_DIR" --dir "$OUT" > /tmp/dg.log 2>&1 &
+          APP_PID=$!
+          cleanup() { kill "$APP_PID" "$SRV_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+
+          TOKEN=""
+          for i in $(seq 1 40); do
+            TOKEN=$(grep '^token=' "$HOME_DIR/instance.port" 2>/dev/null | cut -d= -f2 || true)
+            if [ -n "$TOKEN" ] && curl -sf -H "X-DG-Token: $TOKEN" http://127.0.0.1:8899/api/version > /tmp/ver.json; then
+              break
+            fi
+            sleep 0.5
           done
           cat /tmp/ver.json || true
-          [ "$ok" = "1" ] || { echo "服务未启动"; cat /tmp/dg.log; exit 1; }
-          grep -q '3.1.0' /tmp/ver.json
-          curl -sf http://127.0.0.1:8899/ | grep -q 'DownloadGuard'
+          [ -n "$TOKEN" ] || { echo "没有读到访问令牌"; cat /tmp/dg.log; exit 1; }
+          grep -q '3.1.1' /tmp/ver.json
+
+          # 无令牌必须 403，带 Cookie 才能打开页面
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8899/)" = "403" ]
+          curl -sf -H "Cookie: dg_token=$TOKEN" http://127.0.0.1:8899/ | grep -q 'DownloadGuard'
+
+          curl -sf -X POST http://127.0.0.1:8899/api/tasks \
+            -H "X-DG-Token: $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"url":"http://127.0.0.1:8898/smoke.bin","connections":4}' > /tmp/task.json
+          cat /tmp/task.json
+          python3 - <<'PY'
+          import json, time, urllib.request
+          token = ""
+          for line in open("/tmp/dg-home/instance.port", encoding="utf-8"):
+              if line.startswith("token="):
+                  token = line.split("=", 1)[1].strip()
+          tid = json.load(open("/tmp/task.json"))["ids"][0]
+          for _ in range(60):
+              req = urllib.request.Request("http://127.0.0.1:8899/api/state",
+                                           headers={"X-DG-Token": token})
+              tasks = json.load(urllib.request.urlopen(req))["tasks"]
+              t = next(x for x in tasks if x["id"] == tid)
+              if t["status"] in ("completed", "error"):
+                  break
+              time.sleep(0.5)
+          assert t["status"] == "completed", t
+          print("下载完成：", t["name"], t["size"])
+          PY
+          cmp "$SRC/smoke.bin" "$OUT/smoke.bin"
+          sha256sum "$SRC/smoke.bin" "$OUT/smoke.bin"

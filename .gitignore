@@ -23,3 +23,7 @@ keystore/*.jks
 # 桌面版构建产物
 desktop/build/
 desktop/native/
+
+# Python 缓存（e2e 测试脚本）
+__pycache__/
+*.pyc
