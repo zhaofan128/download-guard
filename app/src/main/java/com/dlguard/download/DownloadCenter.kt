@@ -658,6 +658,31 @@ class DownloadCenter(
         tryStartNext()
     }
 
+    /**
+     * 全部暂停：正在跑的和排队的一起停。
+     *
+     * 多任务队列下逐个点太慢，尤其在地铁里信号变差、想先把带宽让给别的应用时。
+     * 语义与单个暂停一致：只取消协程，`.part` 与 `.part.meta` 全部保留，随时能继续。
+     * 失败和已完成的任务不动——它们本来就不占带宽。
+     */
+    fun pauseAll() {
+        val targets = _tasks.value.filter {
+            it.phase == TaskPhase.RUNNING || it.phase == TaskPhase.QUEUED
+        }
+        if (targets.isEmpty()) return
+        targets.forEach { pauseTask(it.id) }
+    }
+
+    /** 全部继续：所有暂停中的任务回到队列，按「同时下载任务数」依次补位。 */
+    fun resumeAll() = synchronized(lock) {
+        val paused = _tasks.value.filter { it.phase == TaskPhase.PAUSED }
+        if (paused.isEmpty()) return
+        paused.forEach { task ->
+            updateTask(task.id) { it.copy(phase = TaskPhase.QUEUED, message = null) }
+        }
+        tryStartNext()
+    }
+
     /** 删除任务：正在下载就取消（分片保留，重加同链接会自动续传），并从列表移除。 */
     fun removeTask(id: Long) = synchronized(lock) {
         runtimes.remove(id)?.job?.cancel(CancellationException("用户删除任务"))

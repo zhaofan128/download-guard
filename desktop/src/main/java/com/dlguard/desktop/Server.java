@@ -34,12 +34,18 @@ public final class Server {
     private final Engine engine;
     private final boolean lan;
     private final String token;
+    private final List<String> extraHosts;
     private HttpServer server;
     private int port;
 
     public Server(Engine engine, int port, boolean lan) throws IOException {
+        this(engine, port, lan, null);
+    }
+
+    public Server(Engine engine, int port, boolean lan, List<String> extraHosts) throws IOException {
         this.engine = engine;
         this.lan = lan;
+        this.extraHosts = extraHosts;
         this.token = lan ? newToken() : "";
         IOException last = null;
         for (int i = 0; i < 30; i++) {
@@ -89,6 +95,18 @@ public final class Server {
         try {
             ex.getResponseHeaders().add("X-Content-Type-Options", "nosniff");
             ex.getResponseHeaders().add("Referrer-Policy", "no-referrer");
+            ex.getResponseHeaders().add("X-Frame-Options", "DENY");
+            ex.getResponseHeaders().add("Cross-Origin-Resource-Policy", "same-origin");
+            // 先判来源：本机端口对浏览器里的任何页面都是可达的，
+            // 不判 Host/Origin 的话，一个 <form> 就能往这里塞下载任务。
+            String host = ex.getRequestHeaders().getFirst("Host");
+            String origin = ex.getRequestHeaders().getFirst("Origin");
+            String fetchSite = ex.getRequestHeaders().getFirst("Sec-Fetch-Site");
+            if (!Guard.allowed(host, origin, fetchSite, port, lan, extraHosts)) {
+                json(ex, 403, Json.obj("ok", false,
+                        "error", Guard.rejectReason(host, origin, fetchSite, port, lan, extraHosts)));
+                return;
+            }
             String path = ex.getRequestURI().getPath();
             if (path.startsWith("/api/") || path.equals("/events")) {
                 if (!authorized(ex)) {
@@ -126,7 +144,7 @@ public final class Server {
 
     private void routeApi(HttpExchange ex, String path) throws Exception {
         String method = ex.getRequestMethod();
-        if (path.equals("/events")) {
+        if (path.equals("/events") || path.equals("/api/events")) {
             streamEvents(ex);
             return;
         }
@@ -184,6 +202,16 @@ public final class Server {
             json(ex, 200, Json.obj("ok", true, "id", t.id));
             return;
         }
+        if (path.equals("/api/tasks/all/pause") && "POST".equals(method)) {
+            int n = engine.pauseAll();
+            json(ex, 200, Json.obj("ok", true, "affected", n));
+            return;
+        }
+        if (path.equals("/api/tasks/all/resume") && "POST".equals(method)) {
+            int n = engine.resumeAll();
+            json(ex, 200, Json.obj("ok", true, "affected", n));
+            return;
+        }
         if (path.startsWith("/api/tasks/")) {
             String rest = path.substring("/api/tasks/".length());
             String[] parts = rest.split("/");
@@ -228,6 +256,11 @@ public final class Server {
             return;
         }
         if (path.equals("/api/open-dir")) {
+            // 只接受 POST：GET 能被 <img src> 之类直接触发，等于给任意网页一个「打开文件夹」的入口
+            if (!"POST".equals(method)) {
+                json(ex, 405, Json.obj("ok", false, "error", "该接口只接受 POST"));
+                return;
+            }
             Util.openInOS(Paths.get(engine.settings.saveDir));
             json(ex, 200, Json.obj("ok", true));
             return;

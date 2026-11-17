@@ -8,7 +8,7 @@
 - 手机、平板连同一个 WiFi 就能打开同一套界面（`--lan`），**一份 UI 同时适配电脑和手机**；
 - 升级只换一个 jar，不用卸载重装。
 
-桌面版 3.0.0 与 Android 3.0.0 同版本号，功能对等但不共享代码：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
+桌面版 3.1.0 与 Android 3.1.0 同版本号，功能对等但不共享代码：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
 
 ---
 
@@ -36,14 +36,14 @@ java -version
 | Windows | 双击 `start-windows.bat` |
 | macOS | 双击 `start-macos.command`（首次可能要在「系统设置 → 隐私与安全性」里放行） |
 | Linux | 双击或在终端执行 `./start-linux.sh` |
-| 任何系统 | `java -jar DownloadGuard-Desktop-3.0.0.jar` |
+| 任何系统 | `java -jar DownloadGuard-Desktop-3.1.0.jar` |
 
 启动后会自动打开浏览器。关掉浏览器不会退出下载，**回到终端按 `Ctrl + C` 才退出**（会先保存断点）。
 
 ### 手机 / 平板访问
 
 ```bash
-java -jar DownloadGuard-Desktop-3.0.0.jar --lan
+java -jar DownloadGuard-Desktop-3.1.0.jar --lan
 ```
 
 终端会打印一行带令牌的地址，例如：
@@ -79,7 +79,7 @@ Android 8.0+ 装 APK；能开浏览器的设备（包括 Kindle Fire、智能电
 | --- | --- |
 | 多连接分段下载 | 默认 8 连接，可 1–32；按文件大小自动分段，段与段之间用 `RandomAccessFile` 按偏移写，不会重叠 |
 | 断点续传 | 分段进度写进 `parts/<id>.meta.json`，进程被杀、断电、重启都能接着下；只续「上次退出时正在下载」的任务，**手动暂停的不会自己偷偷开工** |
-| 队列与并发 | 同时下载 1–10 个任务，其余排队；完成一个自动补位 |
+| 队列与并发 | 同时下载 1–10 个任务，其余排队；完成一个自动补位；支持**全部暂停 / 全部继续** |
 | 全局限速 | 所有任务共享一个令牌桶，限多少就是多少，不是每个连接各限一次 |
 | HLS 点播 | `.m3u8` 主清单按码率挑最高一路，分片并发拉取后按序拼接；`AES-128` 用清单里的密钥解密；有 ffmpeg 时无转码封装成 mp4，失败保留 `.ts` |
 | BT / 磁力 | 通过本机 `aria2c` 的 JSON-RPC 托管：磁力、`.torrent` 都支持，进度/速度/做种状态映射回任务列表。没装 aria2 时给一句能照做的安装提示，不假装支持 |
@@ -102,23 +102,51 @@ Android 8.0+ 装 APK；能开浏览器的设备（包括 Kindle Fire、智能电
 ## 三、命令行参数
 
 ```
-java -jar DownloadGuard-Desktop-3.0.0.jar [选项]
+java -jar DownloadGuard-Desktop-3.1.0.jar [选项]
 
   --port <端口>     指定端口，默认 8765（被占用会自动顺延）
   --lan             允许局域网设备访问（带随机令牌）
   --no-browser      启动后不打开浏览器
   --dir <目录>      默认保存目录
   --home <目录>     数据目录（任务、断点、设置），默认 ~/.dlguard-desktop
-  --selftest        跑内置自检（22 项），失败返回非 0
+  --allow-host <名> 额外允许的 Host（逗号分隔），用自定义域名访问时才需要
+  --selftest        跑内置自检（36 项），失败返回非 0
   --version         打印版本
   --help            显示帮助
+
+命令行投递（配合正在运行的实例）：
+  --add <链接>      投递一个下载任务，可重复
+  --status          打印当前队列
+  --wait            投递后等到任务结束，失败返回非 0
+  --sha256 <值>     给投递的任务带上校验基准
+  --connections <n> 投递任务的连接数（1~32）
+  --quiet           只输出结果，不刷进度
 ```
 
 例：给下载机用，不弹浏览器、限 9000 端口：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.0.0.jar --port 9000 --no-browser --dir /data/downloads
+java -jar DownloadGuard-Desktop-3.1.0.jar --port 9000 --no-browser --dir /data/downloads
 ```
+
+### 用命令行投递（不点界面）
+
+桌面版本质上是一个本地服务，所以把它接到了命令行上——下载机、cron、CI 都不用去模拟浏览器点击：
+
+```bash
+# 投一个任务并等它下完；失败返回非 0，脚本里能直接判断
+java -jar DownloadGuard-Desktop-3.1.0.jar --add https://example.com/big.iso --wait
+
+# 看队列（状态、进度、速度、文件名）
+java -jar DownloadGuard-Desktop-3.1.0.jar --status
+
+# 带官方哈希投递，下完自动比对
+java -jar DownloadGuard-Desktop-3.1.0.jar --add https://example.com/a.apk \
+  --sha256 9f2c... --connections 16 --wait --quiet
+```
+
+前提是已经有一个实例在跑（`--add` 只和本机实例对话，不会自己起第二个进程抢断点）。
+`--home` 要和实例一致；实例端口与访问令牌从数据目录的 `instance.port` 读取（权限 0600）。
 
 ---
 
@@ -170,7 +198,7 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --port 9000 --no-browser --dir /data/d
 **macOS 提示「无法验证开发者」**
 
 ```bash
-xattr -d com.apple.quarantine DownloadGuard-Desktop-3.0.0.jar
+xattr -d com.apple.quarantine DownloadGuard-Desktop-3.1.0.jar
 ```
 
 **双击了两次，第二次一闪而过**
@@ -185,8 +213,8 @@ HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift
 
 ```bash
 ./build.sh                                   # 编译
-java -jar ../dist/DownloadGuard-Desktop-3.0.0.jar --selftest   # 22 项内置自检
-python3 test/e2e.py                          # 17 项端到端（起真服务器、真下载、真杀进程）
+java -jar ../dist/DownloadGuard-Desktop-3.1.0.jar --selftest   # 36 项内置自检
+python3 test/e2e.py                          # 28 项端到端（起真服务器、真下载、真杀进程）
 ```
 
 `test/e2e.py` 覆盖的是单测够不着的那类问题：
@@ -196,6 +224,9 @@ python3 test/e2e.py                          # 17 项端到端（起真服务器
 | 服务器忽略 Range，暂停再续传 | 服务器返回 200 全量，程序按断点偏移写入，**文件长度对、后半段内容全是错的** |
 | 支持 Range，下载中杀进程重启 | 分段记录与实际字节位置对不上，拼出来是坏文件 |
 | 中文文件名（RFC 5987） | 落地成 `download` 或 `%E4%B8%AD...` |
+| 陌生 Host / 跨站 Origin 打 `/api/tasks` | 浏览器里任何页面都能往本机下载器塞任务，还能指定任意目录写入 |
+| `--add` 命令行投递 | 脚本只能靠模拟浏览器点击，CI 里没法用 |
+| `/api/events` 的 SSE 推送 | 前端写 `/api/events`、服务端只认 `/events`，事件流一直 404，界面其实在轮询 |
 
 CI 里和编译、自检、启动烟雾测试一起跑，失败即红。
 
@@ -208,6 +239,7 @@ CI 里和编译、自检、启动烟雾测试一起跑，失败即红。
 - **前端零构建**：一个 `index.html` + `app.css` + `app.js`，没有 npm、没有打包器，改一行刷新就生效。
 - **状态推送用 SSE**：比轮询省电，比 WebSocket 简单；断线自动重连，另有 1.5 秒轮询兜底。
 - **安全默认**：只监听 `127.0.0.1`；开 `--lan` 必须带令牌；静态资源和接口走同一套鉴权；APK 校验失败移隔离区而不是直接删。
+- **本机服务不等于只对本应用开放**：浏览器里的任何页面都能向 `127.0.0.1` 发简单请求，所以每个请求都要过 Host / Origin / `Sec-Fetch-Site` 三重判定，拦跨站写入与 DNS 重绑定；`/api/open-dir` 只接受 POST，避免被 `<img src>` 触发。
 
 ---
 

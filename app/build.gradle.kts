@@ -20,8 +20,8 @@ android {
         applicationId = "com.dlguard"
         minSdk = 26
         targetSdk = 34
-        versionCode = 28
-        versionName = "3.0.0"
+        versionCode = 29
+        versionName = "3.1.0"
 
         vectorDrawables { useSupportLibrary = true }
         resourceConfigurations += listOf("zh", "en")

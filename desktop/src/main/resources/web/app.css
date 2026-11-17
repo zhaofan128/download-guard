@@ -390,6 +390,8 @@ button { cursor: pointer; border: none; background: none; }
 .ghost-btn svg { width: 15px; height: 15px; }
 .ghost-btn:hover { color: var(--text); border-color: var(--line-2); background: var(--panel-solid); }
 .ghost-btn.danger:hover { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+.ghost-btn:disabled { opacity: .38; cursor: not-allowed; }
+.ghost-btn:disabled:hover { color: var(--text-2); border-color: var(--line); background: var(--panel); }
 
 .content {
   padding: 8px clamp(18px, 3.4vw, 42px) 64px;
@@ -452,6 +454,7 @@ button { cursor: pointer; border: none; background: none; }
 
 .list-head { display: flex; align-items: center; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
 .list-head h2 { font-size: 15px; font-weight: 600; letter-spacing: -.01em; }
+.list-action { height: 32px; }
 .list-tools { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 
 .seg-filter {
@@ -1069,6 +1072,9 @@ button { cursor: pointer; border: none; background: none; }
   .search { min-height: 42px; }
   .list-head h2 { font-size: 14px; }
   .list-tools .ghost-btn { display: none; }
+  /* 窄屏保留「全部暂停/继续」，只留图标；清理记录仍然收起来，避免一行挤四个按钮 */
+  .list-head .list-action { display: inline-flex; height: 32px; padding: 0 9px; }
+  .list-head .list-action .btn-label { display: none; }
   .task { grid-template-columns: 40px minmax(0, 1fr) auto; padding: 13px; gap: 11px; border-radius: 16px; }
   .task-icon { width: 40px; height: 40px; border-radius: 12px; }
   .task-name { font-size: 14px; }

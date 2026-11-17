@@ -157,6 +157,12 @@
 
         <div class="list-head">
           <h2 id="listTitle">任务</h2>
+          <button class="ghost-btn list-action" id="pauseAllBtn" title="暂停所有正在下载与排队的任务">
+            <svg><use href="#i-pause"/></svg><span class="btn-label">全部暂停</span>
+          </button>
+          <button class="ghost-btn list-action" id="resumeAllBtn" title="继续所有已暂停的任务">
+            <svg><use href="#i-play"/></svg><span class="btn-label">全部继续</span>
+          </button>
           <div class="list-tools">
             <div class="seg-filter" role="tablist" aria-label="筛选">
               <button class="is-active" data-filter="all">全部</button>

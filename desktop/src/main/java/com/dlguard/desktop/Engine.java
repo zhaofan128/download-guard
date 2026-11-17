@@ -39,7 +39,20 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.0.0";
+    public static final String VERSION = "3.1.0";
+
+    /**
+     * 单个分段允许的最大重连次数。
+     *
+     * 正常网络抖动是个位数；设这个上限只为拦住「每次给几字节就断开」的病态服务器——
+     * 没有它，只要服务器愿意给数据，这个 while 就永远转下去，用户看到的是
+     * 一个永远 0.1% 的任务，而不是一条能看懂的错误。每次重连至少退避 400ms，
+     * 500 次约等于 200 秒。
+     */
+    static final int MAX_SEGMENT_RECONNECTS = 500;
+
+    /** 单个分段连续收不到数据的容忍时长，超过就判定这条连接已经死了。 */
+    static final long STALL_LIMIT_MS = 120_000L;
 
     public final Store store;
     public volatile Settings settings;
@@ -241,6 +254,44 @@ public final class Engine {
             finishCancel(t);
         }
         fire();
+    }
+
+    /**
+     * 全部暂停：下载中的打暂停标记（线程在下一个检查点退出），排队中的直接转暂停。
+     * 与单个任务的「暂停」语义一致——保留断点，重启后不自动开工。
+     */
+    public int pauseAll() {
+        int n = 0;
+        for (Task t : snapshot()) {
+            if ("downloading".equals(t.status) || "queued".equals(t.status)) {
+                t.pauseRequested = true;
+                t.resumeOnStart = false;
+                if ("queued".equals(t.status)) t.status = "paused";
+                n++;
+            }
+        }
+        persist(true);
+        fire();
+        return n;
+    }
+
+    /** 全部继续：暂停中的回到队列，按「同时下载任务数」的额度依次开跑。 */
+    public int resumeAll() {
+        int n = 0;
+        for (Task t : snapshot()) {
+            if ("paused".equals(t.status)) {
+                t.status = "queued";
+                t.error = "";
+                t.pauseRequested = false;
+                n++;
+            }
+        }
+        if (n > 0) {
+            persist(true);
+            startQueued();
+        }
+        fire();
+        return n;
     }
 
     private void finishCancel(Task t) {
@@ -462,6 +513,8 @@ public final class Engine {
     private void fetchSegment(Task t, Task.Seg seg, RandomAccessFile raf) throws Exception {
         int attempt = 0;
         int restarts = 0;
+        int reconnects = 0;
+        long lastProgressAt = System.currentTimeMillis();
         byte[] buf = new byte[128 * 1024];
         while (seg.done < seg.length()) {
             if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
@@ -505,6 +558,7 @@ public final class Engine {
                     }
                     seg.done += n;
                     written += n;
+                    lastProgressAt = System.currentTimeMillis();
                     t.done = t.totalDone();
                 }
             } finally {
@@ -516,13 +570,38 @@ public final class Engine {
                     seg.done = seg.length();
                     break;
                 }
-                // 连接提前断了：同一段重试，保留已写入的字节
+                // 连接提前断了：同一段重试，保留已写入的字节。
+                // 两种病态服务器必须设上限，否则这个 while 永远转下去：
+                //  1) 一个字节都不给就断（attempt）；
+                //  2) 每次只给一点点再断，看着"有进展"实际永远下不完（reconnects / 无进展时长）。
                 if (written == 0 && ++attempt > 4) {
                     throw new IOException("连接反复中断，已重试 " + attempt + " 次");
                 }
+                String budget = retryBudgetError(reconnects + 1,
+                        System.currentTimeMillis() - lastProgressAt, seg.done, seg.length());
+                reconnects++;
+                if (budget != null) throw new IOException(budget);
                 Thread.sleep(Math.min(4000, 400L * Math.max(1, attempt)));
             }
         }
+    }
+
+    /**
+     * 分段重试预算。返回 null 表示还能继续重试，否则返回给用户看的原因。
+     *
+     * 独立成纯函数是为了能被自检直接覆盖：这段逻辑以前没有上限，
+     * 「每次给 1 字节再断开」的服务器会让 worker 永远转下去。
+     */
+    static String retryBudgetError(int reconnects, long silentMs, long done, long length) {
+        if (reconnects > MAX_SEGMENT_RECONNECTS) {
+            int percent = (int) (done * 100 / Math.max(1, length));
+            return "这个分段的连接被服务器反复断开（已重连 " + MAX_SEGMENT_RECONNECTS
+                    + " 次，完成 " + percent + "%），请换个网络或稍后重试";
+        }
+        if (silentMs > STALL_LIMIT_MS) {
+            return "这个分段连续 " + (STALL_LIMIT_MS / 1000) + " 秒没有收到任何数据，已停止重试";
+        }
+        return null;
     }
 
     HttpURLConnection open(String url, String range) throws IOException {

@@ -34,6 +34,8 @@ public final class SelfTest {
         contentDisposition();
         errorMessages();
         taskRoundTrip();
+        requestGuard();
+        retryBudget();
         zipInspection();
         apkSignatureIfPresent();
         resumeSemantics();
@@ -161,5 +163,51 @@ public final class SelfTest {
         manualPause.status = "paused";
         manualPause.resumeOnStart = false;
         check("手动暂停不自动续传", !Json.bool(manualPause.toMap(), "resumeOnStart", true), "");
+    }
+
+    /**
+     * 本地服务的来源判定。
+     *
+     * 这些用例对应真实攻击面：任意网页都能向 127.0.0.1 发简单请求，
+     * 不做 Host/Origin 校验就等于把「往任意目录下载任意文件」暴露给浏览器。
+     */
+    private static void requestGuard() {
+        int port = 8765;
+        check("本机 Host 放行",
+                Guard.allowed("127.0.0.1:8765", null, null, port, false, null), "");
+        check("localhost 放行",
+                Guard.allowed("localhost:8765", null, null, port, false, null), "");
+        check("IPv6 回环放行",
+                Guard.allowed("[::1]:8765", null, null, port, false, null), "");
+        check("陌生域名拒绝（DNS 重绑定）",
+                !Guard.allowed("evil.example:8765", null, null, port, false, null), "");
+        check("端口不符拒绝",
+                !Guard.allowed("127.0.0.1:9999", null, null, port, false, null), "");
+        check("跨站 Origin 拒绝",
+                !Guard.allowed("127.0.0.1:8765", "http://evil.example", null, port, false, null), "");
+        check("同源 Origin 放行",
+                Guard.allowed("127.0.0.1:8765", "http://127.0.0.1:8765", null, port, false, null), "");
+        check("Origin: null 拒绝",
+                !Guard.allowed("127.0.0.1:8765", "null", null, port, false, null), "");
+        check("Sec-Fetch-Site: cross-site 拒绝",
+                !Guard.allowed("127.0.0.1:8765", null, "cross-site", port, false, null), "");
+        check("显式放行的域名可用",
+                Guard.allowed("dg.lan:8765", null, null, port, false, java.util.Collections.singletonList("dg.lan")), "");
+        check("--lan 下要求 Host",
+                !Guard.allowed(null, null, null, port, true, null), "");
+        check("HTTP/1.0 无 Host 本机放行",
+                Guard.allowed(null, null, null, port, false, null), "");
+    }
+
+    /** 分段重试必须有上限，否则「每次给 1 字节再断开」的服务器会让 worker 永远转。 */
+    private static void retryBudget() {
+        check("正常重连不触发预算",
+                Engine.retryBudgetError(1, 1000, 0, 1024) == null, "");
+        check("重连次数到上限放行最后一次",
+                Engine.retryBudgetError(Engine.MAX_SEGMENT_RECONNECTS, 0, 0, 1024) == null, "");
+        check("重连超限报错",
+                Engine.retryBudgetError(Engine.MAX_SEGMENT_RECONNECTS + 1, 0, 0, 1024) != null, "");
+        check("长时间无数据报错",
+                Engine.retryBudgetError(1, Engine.STALL_LIMIT_MS + 1, 0, 1024) != null, "");
     }
 }

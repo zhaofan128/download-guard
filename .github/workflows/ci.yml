@@ -92,7 +92,7 @@ jobs:
         run: cd desktop && ./build.sh
 
       - name: 内置自检
-        run: java -jar dist/DownloadGuard-Desktop-3.0.0.jar --selftest
+        run: java -jar dist/DownloadGuard-Desktop-3.1.0.jar --selftest
 
       # 下载完整性这类问题单测覆盖不到：起真服务器、真下、真杀进程
       - name: 下载完整性端到端测试
@@ -101,7 +101,7 @@ jobs:
       # 光编译过不算数：真启动一次，确认 HTTP 服务和静态资源都活着
       - name: 启动烟雾测试
         run: |
-          java -jar dist/DownloadGuard-Desktop-3.0.0.jar --port 8899 --no-browser --dir /tmp/dg > /tmp/dg.log 2>&1 &
+          java -jar dist/DownloadGuard-Desktop-3.1.0.jar --port 8899 --no-browser --dir /tmp/dg > /tmp/dg.log 2>&1 &
           ok=0
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8899/api/version > /tmp/ver.json; then ok=1; break; fi
@@ -109,5 +109,5 @@ jobs:
           done
           cat /tmp/ver.json || true
           [ "$ok" = "1" ] || { echo "服务未启动"; cat /tmp/dg.log; exit 1; }
-          grep -q '3.0.0' /tmp/ver.json
+          grep -q '3.1.0' /tmp/ver.json
           curl -sf http://127.0.0.1:8899/ | grep -q 'DownloadGuard'

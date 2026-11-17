@@ -449,6 +449,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     /** 继续（暂停）/ 重试（失败）某个任务。 */
     fun resumeTask(id: Long) = container.downloadCenter.resumeTask(id)
 
+    /** 全部暂停：下载中与排队中的一起停，断点保留。 */
+    fun pauseAllTasks() = container.downloadCenter.pauseAll()
+
+    /** 全部继续：所有暂停中的任务回到队列。 */
+    fun resumeAllTasks() = container.downloadCenter.resumeAll()
+
     /** 删除某个任务：正在下载就取消并移除（分片保留）。 */
     fun removeTask(id: Long) = container.downloadCenter.removeTask(id)
 

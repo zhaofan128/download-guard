@@ -173,6 +173,13 @@
     $('#sideDir').textContent = data.settings.saveDir;
     $('#sideDir').title = data.settings.saveDir;
     $('#sideSpeed').querySelector('b').textContent = fmtSpeed(data.stats.speed);
+    const tasks = data.tasks || [];
+    const pausable = tasks.some((t) => t.status === 'downloading' || t.status === 'queued');
+    const resumable = tasks.some((t) => t.status === 'paused');
+    const pauseAll = $('#pauseAllBtn');
+    const resumeAll = $('#resumeAllBtn');
+    if (pauseAll) pauseAll.disabled = !pausable;
+    if (resumeAll) resumeAll.disabled = !resumable;
     renderStats(data);
     renderList();
     updateNavCounts();
@@ -855,6 +862,24 @@
     });
     $('#openDirBtn').addEventListener('click', () => api('/api/open-dir').catch((e) => toast(e.message, 'bad')));
     $('#openDataDir').addEventListener('click', () => api('/api/open-dir').catch(() => {}));
+    $('#pauseAllBtn').addEventListener('click', async () => {
+      try {
+        const r = await api('/api/tasks/all/pause');
+        await loadState();
+        toast(r.affected ? `已暂停 ${r.affected} 个任务` : '没有正在进行的任务');
+      } catch (e) {
+        toast(e.message, 'bad');
+      }
+    });
+    $('#resumeAllBtn').addEventListener('click', async () => {
+      try {
+        const r = await api('/api/tasks/all/resume');
+        await loadState();
+        toast(r.affected ? `已继续 ${r.affected} 个任务` : '没有暂停中的任务');
+      } catch (e) {
+        toast(e.message, 'bad');
+      }
+    });
     $('#detectAria2').addEventListener('click', async () => {
       await loadState();
       const env = state.data.env;

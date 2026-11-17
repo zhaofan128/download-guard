@@ -20,6 +20,13 @@ public final class Main {
         boolean openBrowser = true;
         String dir = null;
         String home = null;
+        List<String> addUrls = new ArrayList<>();
+        List<String> allowHosts = new ArrayList<>();
+        boolean statusOnly = false;
+        boolean wait = false;
+        boolean quiet = false;
+        String sha = "";
+        int cliConn = 0;
 
         for (int i = 0; i < args.length; i++) {
             String a = args[i];
@@ -40,6 +47,31 @@ public final class Main {
                 case "--home":
                     if (i + 1 < args.length) home = args[++i];
                     break;
+                case "--add":
+                    if (i + 1 < args.length) addUrls.add(args[++i]);
+                    break;
+                case "--status":
+                    statusOnly = true;
+                    break;
+                case "--wait":
+                    wait = true;
+                    break;
+                case "--quiet":
+                    quiet = true;
+                    break;
+                case "--sha256":
+                    if (i + 1 < args.length) sha = args[++i];
+                    break;
+                case "--connections":
+                    if (i + 1 < args.length) cliConn = parseInt(args[++i], 0);
+                    break;
+                case "--allow-host":
+                    if (i + 1 < args.length) {
+                        for (String h : args[++i].split(",")) {
+                            if (!h.trim().isEmpty()) allowHosts.add(h.trim());
+                        }
+                    }
+                    break;
                 case "--version":
                     System.out.println("DownloadGuard Desktop " + Engine.VERSION);
                     return;
@@ -54,6 +86,14 @@ public final class Main {
                     if (a.startsWith("--port=")) port = parseInt(a.substring(7), 0);
                     else if (a.startsWith("--dir=")) dir = a.substring(6);
                     else if (a.startsWith("--home=")) home = a.substring(7);
+                    else if (a.startsWith("--add=")) addUrls.add(a.substring(6));
+                    else if (a.startsWith("--sha256=")) sha = a.substring(9);
+                    else if (a.startsWith("--connections=")) cliConn = parseInt(a.substring(14), 0);
+                    else if (a.startsWith("--allow-host=")) {
+                        for (String h : a.substring(13).split(",")) {
+                            if (!h.trim().isEmpty()) allowHosts.add(h.trim());
+                        }
+                    }
                     break;
             }
         }
@@ -61,6 +101,15 @@ public final class Main {
         Store store = (home == null || home.trim().isEmpty())
                 ? new Store()
                 : new Store(Paths.get(home.trim()));
+
+        // 命令行模式：只和正在运行的实例对话，自己不起服务、不碰实例锁
+        if (statusOnly || !addUrls.isEmpty()) {
+            int code = statusOnly
+                    ? Cli.status(store)
+                    : Cli.add(store, addUrls, dir, cliConn, sha, wait, quiet);
+            System.exit(code);
+        }
+
         if (!store.lockInstance()) {
             int running = store.readInstancePort();
             System.out.println();
@@ -81,14 +130,14 @@ public final class Main {
 
         Server server;
         try {
-            server = new Server(engine, port, lan);
+            server = new Server(engine, port, lan, allowHosts);
         } catch (Exception e) {
             System.err.println("启动失败：无法监听端口 " + port + "（" + e.getMessage() + "）");
             System.err.println("可以换一个端口：java -jar DownloadGuard-Desktop.jar --port 9000");
             return;
         }
         engine.serverPort = server.port();
-        store.writeInstancePort(server.port());
+        store.writeInstanceInfo(server.port(), server.token());
         engine.start();
         server.start();
 
@@ -137,9 +186,18 @@ public final class Main {
         lines.add("  --no-browser      启动后不自动打开浏览器");
         lines.add("  --dir <目录>      默认保存目录");
         lines.add("  --home <目录>     数据目录（任务与断点），默认 ~/.dlguard-desktop");
+        lines.add("  --allow-host <名> 额外允许的 Host（逗号分隔），仅在用自定义域名访问时需要");
         lines.add("  --selftest        跑内置自检（CI 用），失败返回非 0");
         lines.add("  --version         打印版本");
         lines.add("  --help            显示帮助");
+        lines.add("");
+        lines.add("命令行投递（配合正在运行的实例，脚本/CI 用）：");
+        lines.add("  --add <链接>      投递一个下载任务，可重复");
+        lines.add("  --status          打印当前队列");
+        lines.add("  --wait            投递后等到任务结束，失败返回非 0");
+        lines.add("  --sha256 <值>     给投递的任务带上校验基准");
+        lines.add("  --connections <n> 投递任务的连接数（1~32）");
+        lines.add("  --quiet           只输出结果，不刷进度");
         for (String l : lines) System.out.println(l);
     }
 }

@@ -234,6 +234,8 @@ fun HomeScreen(
                 onMessage = viewModel::notifyMessage,
                 onPauseTask = viewModel::pauseTask,
                 onResumeTask = viewModel::resumeTask,
+                onPauseAllTasks = viewModel::pauseAllTasks,
+                onResumeAllTasks = viewModel::resumeAllTasks,
                 onRemoveTask = viewModel::removeTask,
                 onClearTasks = viewModel::clearFinishedTasks,
                 onTaskConnections = viewModel::setTaskConnections,
@@ -688,6 +690,8 @@ private fun DownloadCard(
     onMessage: (String) -> Unit,
     onPauseTask: (Long) -> Unit,
     onResumeTask: (Long) -> Unit,
+    onPauseAllTasks: () -> Unit,
+    onResumeAllTasks: () -> Unit,
     onRemoveTask: (Long) -> Unit,
     onClearTasks: () -> Unit,
     onTaskConnections: (Long, Int) -> Unit,
@@ -834,6 +838,8 @@ private fun DownloadCard(
                 tasks = tasks,
                 onPauseTask = onPauseTask,
                 onResumeTask = onResumeTask,
+                onPauseAllTasks = onPauseAllTasks,
+                onResumeAllTasks = onResumeAllTasks,
                 onRemoveTask = onRemoveTask,
                 onClearTasks = onClearTasks,
                 onTaskConnections = onTaskConnections,
@@ -855,6 +861,8 @@ private fun TaskListSection(
     tasks: List<DownloadTask>,
     onPauseTask: (Long) -> Unit,
     onResumeTask: (Long) -> Unit,
+    onPauseAllTasks: () -> Unit,
+    onResumeAllTasks: () -> Unit,
     onRemoveTask: (Long) -> Unit,
     onClearTasks: () -> Unit,
     onTaskConnections: (Long, Int) -> Unit,
@@ -867,22 +875,27 @@ private fun TaskListSection(
             Text(
                 text = "下载任务 · $running 运行 / ${tasks.size} 总数",
                 style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.weight(1f))
+            val pausable = tasks.any {
+                it.phase == TaskPhase.RUNNING || it.phase == TaskPhase.QUEUED
+            }
+            val resumable = tasks.any { it.phase == TaskPhase.PAUSED }
+            // 一个入口在两种状态间切换：还有在跑的就先给「全部暂停」，全停了才给「全部继续」。
+            // 两个同时摆出来在 320px 宽的手机上会把标题挤没
+            if (pausable) {
+                TaskListAction("全部暂停", onPauseAllTasks)
+            } else if (resumable) {
+                TaskListAction("全部继续", onResumeAllTasks)
+            }
             val hasClearable = tasks.any {
                 it.phase == TaskPhase.DONE || it.phase == TaskPhase.FAILED
             }
             if (hasClearable) {
-                Text(
-                    text = "清已完成",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onClearTasks)
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
-                )
+                TaskListAction("清已完成", onClearTasks)
             }
         }
         tasks.forEach { task ->
@@ -897,6 +910,21 @@ private fun TaskListSection(
             )
         }
     }
+}
+
+/** 任务列表标题行上的小动作（全部暂停/继续、清已完成），统一成一处的样式。 */
+@Composable
+private fun TaskListAction(text: String, onClick: () -> Unit) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.primary,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+    )
 }
 
 /** 单个任务行卡片：文件名 + 进度 + 操作按钮，多任务下每个任务独立操作。 */

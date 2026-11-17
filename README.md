@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
-一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——同一个下载内核，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面。
+一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——同一个下载内核，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.0** 补上「全部暂停 / 全部继续」、电脑版命令行投递，并把本机服务对浏览器的信任边界收紧。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
@@ -32,9 +32,9 @@
 
 这张表会随着能力变化更新，不写「理论上支持」。
 
-桌面版另有 **22 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、ZIP 结构、真实 APK 的 v2/v3 签名与证书指纹提取。
+桌面版另有 **36 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、本地服务的 Host/Origin 判定、分段重试预算、ZIP 结构、真实 APK 的 v2/v3 签名与证书指纹提取。
 
-再加 **17 项端到端测试**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传文件不能错位、支持 Range 时杀进程重启后必须字节一致、RFC 5987 中文文件名。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 启动烟雾测试。
+再加 **30 项端到端测试**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传文件不能错位、支持 Range 时杀进程重启后必须字节一致、RFC 5987 中文文件名、跨站请求打本机接口必须被拒、`--add` 命令行投递能落地且内容一致。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 启动烟雾测试。
 
 关于测试的实话：173 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
 
@@ -62,7 +62,7 @@
 
 ### 那这两类设备怎么用
 
-**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.0.0.jar --lan`，终端会打印一个带随机令牌的地址：
+**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.1.0.jar --lan`，终端会打印一个带随机令牌的地址：
 
 ```
 http://192.168.1.5:8765/?token=8f3c2a...
@@ -80,11 +80,11 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 **[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
 
-3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
+3.1.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
 
 ### 电脑版（Windows / macOS / Linux）
 
-下载 `DownloadGuard-Desktop-3.0.0.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
+下载 `DownloadGuard-Desktop-3.1.0.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
 
 | 系统 | 启动方式 |
 | --- | --- |
@@ -97,7 +97,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 想让手机、平板用同一套界面：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.0.0.jar --lan
+java -jar DownloadGuard-Desktop-3.1.0.jar --lan
 ```
 
 终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
@@ -106,14 +106,14 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --lan
 
 下载后直接安装。首次启动会引导授予「所有文件访问权限」与「通知权限」，之后把链接粘进来就能用。
 
-3.0.0 同时提供两个包，功能完全一致，只是打包的原生库架构不同：
+3.1.0 同时提供两个包，功能完全一致，只是打包的原生库架构不同：
 
 | 包 | 大小 | 适用 |
 | --- | --- | --- |
-| `DownloadGuard-3.0.0-arm64.apk` | 24.4 MB（25,625,486 字节） | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
-| `DownloadGuard-3.0.0-universal.apk` | 73 MB（73,288,816 字节） | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
+| `DownloadGuard-3.1.0-arm64.apk` | 约 24.4 MB | 2018 年之后的绝大多数手机（arm64-v8a），**推荐**，下载快、不易传坏 |
+| `DownloadGuard-3.1.0-universal.apk` | 约 73 MB | 全架构（arm64 / armv7 / x86 / x86_64），老设备或模拟器 |
 
-> **装不上先核对字节数**。APK 的签名块在文件末尾，下载中断会留下一个「能识别成 APK、但没有签名」的半截文件，安装器报的就是「安装包没有签名文件」。用文件管理器看属性里的精确大小，和 Release 页面写的字节数对上再装。
+> **装不上先核对字节数**。APK 的签名块在文件末尾，下载中断会留下一个「能识别成 APK、但没有签名」的半截文件，安装器报的就是「安装包没有签名文件」。用文件管理器看属性里的精确大小，和 Release 页面写的字节数对上再装（同一份源码在不同签名与时间戳下会差几 KB，以 Release 页面为准）。
 
 ---
 
@@ -129,12 +129,15 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --lan
 - 界面是响应式的：≥1120px 左侧完整导航，720–1120px 收成图标栏，<720px 换成底部标签栏 + 悬浮按钮，380px 以下再压一档。**同一套 UI 在电脑、平板、手机上都是原生手感**，不用装 App。
 - 内核和 Android 版同源同思路：分段并发、断点续传、全局限速、HLS + AES-128、BT（走本机 aria2c）、SHA-256、APK v1/v2/v3 签名体检、失败文件隔离。
 - 状态推送用 SSE，断线自动重连并有轮询兜底；所有分段进度落盘，进程被杀也能续。
-- 纯 Java 11、零第三方依赖：jar 只有 151 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
+- 不点界面也能用：`--add <链接> --wait` 投递并等结果，`--status` 看队列，脚本和 CI 不用模拟浏览器点击。
+- 纯 Java 11、零第三方依赖：jar 只有 164 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
 
 | 能力 | 电脑版 | Android 版 |
 | --- | --- | --- |
 | 多连接分段下载 | ✅ 1–32 连接 | ✅ 最多 256 |
 | 断点续传 | ✅ | ✅ |
+| 全部暂停 / 全部继续 | ✅ | ✅ 3.1.0 起 |
+| 命令行投递（脚本 / CI） | ✅ `--add` / `--status` | ➖ |
 | HLS 点播 + AES-128 | ✅ 可调 ffmpeg 封装 mp4 | ✅ |
 | BT / 磁力 | ✅ 需本机 aria2c | ✅ 内置 libtorrent4j |
 | 下载后 SHA-256 / APK 签名校验 | ✅ | ✅ |
@@ -219,7 +222,7 @@ java -jar DownloadGuard-Desktop-3.0.0.jar --lan
 ### 二、内置加固下载器
 
 - **256 连接**上限，块级调度而非固定分段：文件先切成比连接数更多的细块，空闲连接先领新块，领不到就去「偷」慢连接未完成区间的后半段；worker 跑在独立调度器上，不受 `Dispatchers.IO` 默认 64 线程限制
-- **多任务队列**：同时挂多个下载任务，每个任务独立「暂停 / 继续 / 删除 / 重试」；同时下载任务数 1~5 可调，超出的自动排队、前面的完成自动补位
+- **多任务队列**：同时挂多个下载任务，每个任务独立「暂停 / 继续 / 删除 / 重试」；同时下载任务数 1~5 可调，超出的自动排队、前面的完成自动补位；任务多了支持**全部暂停 / 全部继续**，地铁里要临时让出带宽不用逐条点
 - **下载中热切换并发**：拖滑杆即可在 1~256 之间实时调整，调度器每 250ms 增删 worker，已有连接不断、一块进度都不丢（旧版改并发只能取消重下）
 - **暂停 / 继续**：暂停保留 `.part` 与 `.part.meta`，继续时按断点续传；只有「取消」才真正丢弃任务
 - **尾段不掉速**：允许拆分尚未开始的大块（64KB 粒度、10 层拆分），让所有连接一起收尾，解决「越下越慢最后 50KB/s」
@@ -324,8 +327,8 @@ cd download-guard
 ./gradlew :app:testDebugUnitTest      # 全部单元测试（173 个用例 / 31 个测试类）
 
 cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
-java -jar dist/DownloadGuard-Desktop-3.0.0.jar --selftest   # 22 项内置自检
-java -jar dist/DownloadGuard-Desktop-3.0.0.jar              # 启动电脑版
+java -jar dist/DownloadGuard-Desktop-3.1.0.jar --selftest   # 36 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.1.0.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -367,7 +370,9 @@ DownloadGuard/
 │   │   ├── Torrent.java     aria2 JSON-RPC 桥接
 │   │   ├── Integrity.java   ZIP CRC + APK Signing Block / 证书指纹
 │   │   ├── Server.java      内嵌 HTTP、REST、SSE、静态资源
-│   │   └── SelfTest.java    22 项无框架自检
+│   │   ├── Guard.java       请求来源判定（Host / Origin / Sec-Fetch-Site）
+│   │   ├── Cli.java         命令行投递（--add / --status / --wait）
+│   │   └── SelfTest.java    36 项无框架自检
 │   └── src/main/resources/web/   index.html + app.css + app.js（无构建）
 ├── docs/            README 用截图
 ├── .github/workflows/ci.yml   每次 push 跑测试 + 编译 Debug 包 + 桌面版自检，测试数为 0 直接失败
@@ -392,6 +397,7 @@ DownloadGuard/
 - **双栈竞速不是 RFC 8305**：OkHttp 不暴露 socket 层竞速，这里做的是「解析后并发探测、按 RTT 排序」，效果等价于首包走最快路径，但不是 250ms 错峰并发 connect 的原版算法
 - **跨应用抓取有硬边界**：很多 WebView 不把链接暴露给无障碍节点，只能读到可见文本；且必须先由用户开启无障碍与「跨应用抓取」，默认不工作
 - **脚本插件只做字符串变换**：不能发请求、不能读文件，所以「需要多步接口才能解析出真实地址」的站点仍然做不了
+- **电脑版默认只认本机地址**：Host 必须是 `127.0.0.1` / `localhost` / 本机网卡地址（`--lan` 时）。用 Nginx 反代或自定义域名访问会得到 403，需要显式 `--allow-host your.domain`——这是为了挡 DNS 重绑定，不是配置出错
 
 ---
 
@@ -422,6 +428,8 @@ DownloadGuard/
 
 > 这次从 2.2.0 升到 **3.0.0**：多了「在电脑上用」这件事，还改了界面的适配模型（手机/平板/桌面三档断点），属于用户能明确说出的新能力。按 `x.Y.0` 的规则本来只该升到 2.3.0，之所以动 `MAJOR`，是因为交付形态从「一个 APK」变成「APK + 跨平台桌面版」，安装方式、运行环境、安全边界都变了，旧的 2.x 语义已经装不下。
 > 2.2.0 的修复（`.part` 跳过验签、调度器竞态、局域网 token）继续保留在 3.0.0 里，没有回退。完整判定规则见 [VERSIONING.md](VERSIONING.md)。
+>
+> **3.1.0** 回到 `x.Y.0`：新增「全部暂停 / 全部继续」（桌面 + Android）与电脑版命令行投递（`--add` / `--status` / `--wait`）。同一版里修掉三件影响信任的事——本机接口对浏览器里的任意页面开放（跨站写入 + DNS 重绑定）、分段重试没有上限、桌面版 SSE 地址写错一直 404（界面其实在轮询）。
 
 ---
 

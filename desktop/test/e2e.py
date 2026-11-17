@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-JAR = os.path.join(ROOT, "dist", "DownloadGuard-Desktop-3.0.0.jar")
+JAR = os.path.join(ROOT, "dist", "DownloadGuard-Desktop-3.1.0.jar")
 SIZE = 24 * 1024 * 1024  # 24 MB，够跨多个 8 MB 边界，又不至于让 CI 太慢
 
 ok_count = 0
@@ -318,6 +318,148 @@ def scenario_unicode_name(tmp, payload):
             c.kill()
 
 
+def raw_request(port, text, timeout=10.0, max_bytes=200_000):
+    """绕过 urllib 直接发原始 HTTP：需要精确控制 Host / Origin 这类头。"""
+    s = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    try:
+        s.sendall(text.encode())
+        data = b""
+        while len(data) < max_bytes:
+            try:
+                chunk = s.recv(65536)
+            except socket.timeout:
+                break
+            if not chunk:
+                break
+            data += chunk
+        return data.decode("utf-8", "replace")
+    finally:
+        s.close()
+
+
+def post_text(host, port, path, body, extra=""):
+    payload = json.dumps(body)
+    return (f"POST {path} HTTP/1.1\r\nHost: {host}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {len(payload.encode())}\r\n"
+            f"Connection: close\r\n{extra}\r\n{payload}")
+
+
+def status_line(resp):
+    return resp.split("\r\n", 1)[0]
+
+
+def scenario_local_service_guard(tmp, payload):
+    """本机服务不能变成「任意网页都能用的下载器 + 文件写入器」。
+
+    浏览器对 127.0.0.1 的简单请求不触发预检，页面里的一个 <form> 就能把
+    POST 打到 /api/tasks；DNS rebinding 还能让 Host 变成攻击者域名。
+    这里逐条验证拦截，同时确认正常调用不受影响。
+    """
+    print("\n[4] 本地服务请求边界 + 全部暂停/继续")
+    port = free_port()
+    RangeHandler.payload = payload
+    RangeHandler.filename = "guard.bin"
+
+    home = os.path.join(tmp, "home4")
+    out = os.path.join(tmp, "out4")
+    os.makedirs(home, exist_ok=True)
+    os.makedirs(out, exist_ok=True)
+
+    with Server(RangeHandler, port):
+        c = Client(free_port(), home, out)
+        c.start()
+        try:
+            c.settings(speedLimitKB=256, maxConcurrent=2)
+            url = f"http://127.0.0.1:{port}/guard.bin"
+
+            resp = raw_request(c.port, post_text(f"evil.example:{c.port}", c.port, "/api/tasks",
+                                              {"url": url, "dir": out}))
+            check("陌生 Host 被拒绝（DNS 重绑定）", status_line(resp).startswith("HTTP/1.1 403"),
+                  status_line(resp))
+
+            resp = raw_request(c.port, post_text(f"127.0.0.1:{c.port}", c.port, "/api/tasks",
+                                              {"url": url, "dir": out},
+                                              extra="Origin: http://evil.example\r\n"))
+            check("跨站 Origin 被拒绝", status_line(resp).startswith("HTTP/1.1 403"), status_line(resp))
+
+            resp = raw_request(c.port, post_text(f"127.0.0.1:{c.port}", c.port, "/api/tasks",
+                                              {"url": url, "dir": out},
+                                              extra="Sec-Fetch-Site: cross-site\r\n"))
+            check("cross-site 请求被拒绝", status_line(resp).startswith("HTTP/1.1 403"), status_line(resp))
+
+            resp = raw_request(c.port, f"GET /api/open-dir HTTP/1.1\r\nHost: 127.0.0.1:{c.port}\r\n"
+                                     f"Connection: close\r\n\r\n")
+            check("打开目录不接受 GET", status_line(resp).startswith("HTTP/1.1 405"), status_line(resp))
+
+            resp = raw_request(c.port, post_text(f"127.0.0.1:{c.port}", c.port, "/api/tasks",
+                                              {"url": url, "dir": out}))
+            check("本机正常投递放行", " 200 " in status_line(resp), status_line(resp))
+            first_id = ""
+            try:
+                first_id = json.loads(resp.split("\r\n\r\n", 1)[1])["ids"][0]
+            except Exception:
+                pass
+
+            ids = [c.add(url, connections=4) for _ in range(2)]
+            if first_id:
+                ids.append(first_id)
+            time.sleep(1.5)
+            r = c.req("/api/tasks/all/pause", "POST")
+            check(f"全部暂停影响 {len(ids)} 个任务", r.get("affected") == len(ids), str(r))
+            time.sleep(1.0)
+            phases = [c.task(i)["status"] for i in ids]
+            check("全部暂停后没有任务在跑",
+                  all(s in ("paused", "completed") for s in phases), str(phases))
+            r = c.req("/api/tasks/all/resume", "POST")
+            check(f"全部继续影响 {len(ids)} 个任务", r.get("affected") == len(ids), str(r))
+
+            # SSE 曾经一直 404：前端写的是 /api/events，服务端只认 /events
+            resp = raw_request(c.port, f"GET /api/events HTTP/1.1\r\nHost: 127.0.0.1:{c.port}\r\n\r\n",
+                               timeout=3.0)
+            check("SSE 事件流可用", "text/event-stream" in resp and "data: " in resp,
+                  resp[:120].replace("\r\n", " | "))
+
+            for i in ids:
+                c.req(f"/api/tasks/{i}", "DELETE")
+        finally:
+            c.kill()
+
+
+def scenario_cli(tmp, payload):
+    """命令行投递：脚本/CI 不需要模拟浏览器点击。"""
+    print("\n[5] 命令行投递（--add / --status）")
+    port = free_port()
+    RangeHandler.payload = payload[:2 * 1024 * 1024]
+    RangeHandler.filename = "cli.bin"
+
+    home = os.path.join(tmp, "home5")
+    out = os.path.join(tmp, "out5")
+    os.makedirs(home, exist_ok=True)
+    os.makedirs(out, exist_ok=True)
+
+    with Server(RangeHandler, port):
+        c = Client(free_port(), home, out)
+        c.start()
+        try:
+            r = subprocess.run(
+                ["java", "-jar", JAR, "--home", home, "--add",
+                 f"http://127.0.0.1:{port}/cli.bin", "--wait", "--quiet"],
+                capture_output=True, text=True, timeout=120)
+            check("--add --wait 退出码 0", r.returncode == 0,
+                  f"code={r.returncode} err={r.stderr.strip()}")
+            target = os.path.join(out, "cli.bin")
+            check("文件已落地", os.path.isfile(target), str(os.listdir(out)))
+            if os.path.isfile(target):
+                check("内容一致", sha(open(target, "rb").read()) == sha(RangeHandler.payload), "")
+
+            r = subprocess.run(["java", "-jar", JAR, "--home", home, "--status"],
+                               capture_output=True, text=True, timeout=30)
+            check("--status 列出任务", r.returncode == 0 and "cli.bin" in r.stdout, r.stdout.strip())
+        finally:
+            c.kill()
+
+
 def main():
     global JAR
     if len(sys.argv) > 1:
@@ -332,6 +474,8 @@ def main():
         scenario_no_range(tmp, payload)
         scenario_range_restart(tmp, payload)
         scenario_unicode_name(tmp, payload)
+        scenario_local_service_guard(tmp, payload)
+        scenario_cli(tmp, payload)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
