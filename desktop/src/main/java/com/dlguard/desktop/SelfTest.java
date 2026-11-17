@@ -1,5 +1,7 @@
 package com.dlguard.desktop;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,28 +22,33 @@ public final class SelfTest {
 
     private static int passed;
     private static int failed;
+    private static int skipped;
 
     public static int run() {
         passed = 0;
         failed = 0;
+        skipped = 0;
 
         jsonRoundTrip();
         jsonEscapes();
         segmentPlanCoverage();
         segmentPlanNoRange();
         segmentPlanSmallFile();
+        segmentPlanUnknownSize();
         fileNameSanitizing();
         contentDisposition();
         errorMessages();
         taskRoundTrip();
         requestGuard();
         retryBudget();
+        rangeStartParsing();
+        directoryGuard();
         zipInspection();
         apkSignatureIfPresent();
         resumeSemantics();
 
         System.out.println();
-        System.out.println("自检结果：" + passed + " 通过 / " + failed + " 失败");
+        System.out.println("自检结果：" + passed + " 通过 / " + failed + " 失败 / " + skipped + " 跳过");
         return failed == 0 ? 0 : 1;
     }
 
@@ -93,6 +100,13 @@ public final class SelfTest {
     private static void segmentPlanSmallFile() {
         List<Task.Seg> segs = Engine.planSegments(1024, 8, true);
         check("小文件不硬拆多段", segs.size() == 1, "segs=" + segs.size());
+    }
+
+    private static void segmentPlanUnknownSize() {
+        List<Task.Seg> segs = Engine.planSegments(0, 8, true);
+        check("未知长度不生成 1 字节占位段",
+                segs.size() == 1 && segs.get(0).length() == 0, "segs=" + segs.size()
+                        + " len=" + (segs.isEmpty() ? -1 : segs.get(0).length()));
     }
 
     private static void fileNameSanitizing() {
@@ -149,13 +163,84 @@ public final class SelfTest {
 
     private static void apkSignatureIfPresent() {
         Path apk = java.nio.file.Paths.get(System.getProperty("dg.apk", ""));
+        if (!Files.isRegularFile(apk)) apk = java.nio.file.Paths.get("desktop/test/fixtures/signed.apk");
+        if (!Files.isRegularFile(apk)) apk = java.nio.file.Paths.get("../desktop/test/fixtures/signed.apk");
         if (!Files.isRegularFile(apk)) {
-            System.out.println("  · 跳过 APK 签名用例（未提供 -Ddg.apk=/path/to.apk）");
+            skipped++;
+            System.out.println("  · 跳过 APK 验签用例（未提供 -Ddg.apk，也找不到内置样本）");
             return;
         }
         Integrity.Result r = Integrity.inspectApk(apk);
-        check("APK 签名方案识别", r.schemes.contains("v2") || r.schemes.contains("v3"), r.schemes);
+        check("APK v2 验签通过", r.verified(), r.schemes + " / " + r.signatureDetail);
         check("APK 证书指纹提取", r.certSha256.length() == 64, r.certSha256);
+        check("APK 签名方案包含 v2", r.schemes.contains("v2"), r.schemes);
+
+        try {
+            byte[] src = Files.readAllBytes(apk);
+            int start = signingBlockStart(src);
+            check("能定位 APK 签名块", start > 0, "start=" + start);
+            if (start > 0) {
+                // 篡改签名块里的一个字节：ZIP 结构仍然完好，但签名必须验不过
+                byte[] bad = src.clone();
+                int at = Math.min(bad.length - 1, start + 8 + 8 + 4 + 40);
+                bad[at] ^= 0x5a;
+                Path tmp = Files.createTempFile("dg-bad", ".apk");
+                Files.write(tmp, bad);
+                Integrity.Result br = Integrity.inspectApk(tmp);
+                check("篡改签名块不能显示通过", !br.verified(), br.signature + " " + br.signatureDetail);
+                check("篡改后判定为 failed", "failed".equals(br.signature), br.signature);
+                Files.deleteIfExists(tmp);
+
+                // 删除签名块（等价于重新打包没签名）：只能 unsupported，不能 ok
+                Path stripped = Files.createTempFile("dg-unsigned", ".apk");
+                Files.write(stripped, stripSigningBlock(src, start));
+                Integrity.Result sr = Integrity.inspectApk(stripped);
+                check("删除签名块不能显示通过", !sr.verified(), sr.signature);
+                check("删除签名块判定为 unsupported", "unsupported".equals(sr.signature), sr.signature);
+                Files.deleteIfExists(stripped);
+            }
+        } catch (Exception e) {
+            check("APK 篡改/去签名用例", false, e.getMessage());
+        }
+    }
+
+    /** 从 APK 字节里定位签名块起点；找不到返回 -1。 */
+    private static int signingBlockStart(byte[] b) {
+        int eocd = -1;
+        for (int i = b.length - 22; i >= Math.max(0, b.length - 128 * 1024); i--) {
+            if (b[i] == 0x50 && b[i + 1] == 0x4b && b[i + 2] == 0x05 && b[i + 3] == 0x06) {
+                eocd = i;
+                break;
+            }
+        }
+        if (eocd < 0) return -1;
+        ByteBuffer bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN);
+        long cd = bb.getInt(eocd + 16) & 0xffffffffL;
+        if (cd < 32 || cd > b.length) return -1;
+        long size = bb.getLong((int) cd - 24);
+        long start = cd - size - 8;
+        if (start < 0) return -1;
+        String magic = new String(b, (int) cd - 16, 16, StandardCharsets.US_ASCII);
+        return "APK Sig Block 42".equals(magic) ? (int) start : -1;
+    }
+
+    /** 去掉签名块并修正 EOCD 的 central directory offset。 */
+    private static byte[] stripSigningBlock(byte[] b, int start) {
+        ByteBuffer bb = ByteBuffer.wrap(b).order(ByteOrder.LITTLE_ENDIAN);
+        int eocd = -1;
+        for (int i = b.length - 22; i >= 0; i--) {
+            if (b[i] == 0x50 && b[i + 1] == 0x4b && b[i + 2] == 0x05 && b[i + 3] == 0x06) {
+                eocd = i;
+                break;
+            }
+        }
+        int cd = bb.getInt(eocd + 16);
+        byte[] out = new byte[start + (b.length - cd)];
+        System.arraycopy(b, 0, out, 0, start);
+        System.arraycopy(b, cd, out, start, b.length - cd);
+        int newEocd = eocd - (cd - start);
+        ByteBuffer.wrap(out).order(ByteOrder.LITTLE_ENDIAN).putInt(newEocd + 16, start);
+        return out;
     }
 
     private static void resumeSemantics() {
@@ -197,6 +282,67 @@ public final class SelfTest {
                 !Guard.allowed(null, null, null, port, true, null), "");
         check("HTTP/1.0 无 Host 本机放行",
                 Guard.allowed(null, null, null, port, false, null), "");
+    }
+
+    private static void rangeStartParsing() {
+        check("解析 Content-Range 起点", Engine.parseRangeStart("bytes 1048576-2097151/4194304") == 1048576, "");
+        check("拒绝缺失的 Content-Range", Engine.parseRangeStart(null) == -1, "");
+        check("拒绝非 bytes 单位", Engine.parseRangeStart("items 0-10/20") == -1, "");
+    }
+
+    /** 保存目录白名单：系统目录、..、白名单外、软链逃逸都要拒绝。 */
+    private static void directoryGuard() {
+        try {
+            Path tmp = Files.createTempDirectory("dg-dirguard");
+            Path root = Files.createDirectories(tmp.resolve("ok"));
+            Path outside = Files.createDirectories(tmp.resolve("outside"));
+            List<Path> roots = java.util.Collections.singletonList(DirGuard.canonical(root));
+
+            Path inside = DirGuard.resolveWritable(root.resolve("sub").toString(), roots, roots.get(0));
+            check("白名单内目录放行", inside.startsWith(roots.get(0)), inside.toString());
+            check("空目录回退默认目录",
+                    DirGuard.resolveWritable("", roots, roots.get(0)).equals(roots.get(0)), "");
+            check("白名单外目录拒绝",
+                    !accepted(() -> DirGuard.resolveWritable(outside.toString(), roots, roots.get(0))), "");
+            check("系统目录拒绝",
+                    !accepted(() -> DirGuard.resolveWritable("/etc", roots, roots.get(0))), "");
+            check(".. 逃逸拒绝",
+                    !accepted(() -> DirGuard.resolveWritable(root + "/../outside", roots, roots.get(0))), "");
+
+            try {
+                Path link = root.resolve("link");
+                if (!Files.exists(link)) Files.createSymbolicLink(link, outside);
+                check("符号链接逃逸拒绝",
+                        !accepted(() -> DirGuard.resolveWritable(link.toString(), roots, roots.get(0))), "");
+            } catch (UnsupportedOperationException | java.nio.file.FileSystemException e) {
+                // Windows 无权限建软链时不影响其他用例；CI 的 Linux 会真实执行
+                System.out.println("  · 当前文件系统不支持创建符号链接，跳过软链用例");
+            }
+            deleteTree(tmp);
+        } catch (Exception e) {
+            check("目录白名单用例", false, e.getMessage());
+        }
+    }
+
+    private interface Call {
+        void run() throws Exception;
+    }
+
+    private static boolean accepted(Call c) {
+        try {
+            c.run();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static void deleteTree(Path p) {
+        try (java.util.stream.Stream<Path> s = Files.walk(p)) {
+            s.sorted((a, b) -> b.getNameCount() - a.getNameCount()).forEach(x -> {
+                try { Files.deleteIfExists(x); } catch (Exception ignored) { }
+            });
+        } catch (Exception ignored) { }
     }
 
     /** 分段重试必须有上限，否则「每次给 1 字节再断开」的服务器会让 worker 永远转。 */

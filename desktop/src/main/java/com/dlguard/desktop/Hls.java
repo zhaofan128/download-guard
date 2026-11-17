@@ -10,6 +10,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -65,9 +66,10 @@ public final class Hls {
         }
 
         List<Seg> segs = parseMedia(lines, playlistUrl);
-        if (segs.isEmpty()) throw new IOException("播放列表里没有分片，可能是直播流，暂不支持");
+        if (segs.isEmpty()) throw new IOException("播放列表里没有分片");
         if (!text.contains("#EXT-X-ENDLIST")) {
-            t.stage = "直播流（无结束标记），将按当前清单下载";
+            // 直播清单会不断追加分片，按当前窗口拼出来的文件既不是完整节目也不是可续传的稳定对象
+            throw new IOException("这是直播流（播放列表没有 #EXT-X-ENDLIST），暂不支持离线下载");
         }
 
         String name = t.name;
@@ -80,14 +82,53 @@ public final class Hls {
         Path workDir = engine.store.partsDir.resolve(t.id + "-hls");
         Files.createDirectories(workDir);
         Path merged = engine.store.partPath(t);
+        Path metaFile = workDir.resolve("playlist.meta.json");
 
         int total = segs.size();
+        String fingerprint = sha256Text(playlistUrl + "\n" + text);
+        HlsMeta meta = HlsMeta.load(metaFile);
+        boolean samePlaylist = meta != null && fingerprint.equals(meta.playlistSha256)
+                && meta.count == total;
+        if (!samePlaylist) {
+            // 清单变了（或旧版本留下的工作目录没有元数据）：旧分片可能来自另一个版本，
+            // 一律清掉重下，绝不把两版分片拼进同一个文件
+            clearSegments(workDir);
+            meta = new HlsMeta();
+            meta.playlistUrl = playlistUrl;
+            meta.playlistSha256 = fingerprint;
+            meta.count = total;
+            meta.sizes = new long[total];
+            meta.save(metaFile);
+        }
+
+        // 残留的 .part 一律删除：它们是「写到一半被杀」的产物，不能当成完整分片
+        try (java.util.stream.Stream<Path> stream = Files.list(workDir)) {
+            stream.filter(p -> p.getFileName().toString().endsWith(".seg.part"))
+                    .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) { } });
+        } catch (IOException ignored) { }
+
+        long[] sizes = new long[total];
+        for (int i = 0; i < total; i++) {
+            Path seg = workDir.resolve(i + ".seg");
+            long expected = meta.sizes != null && i < meta.sizes.length ? meta.sizes[i] : 0;
+            if (Files.isRegularFile(seg) && Files.size(seg) > 0
+                    && (expected <= 0 || Files.size(seg) == expected)) {
+                sizes[i] = Files.size(seg);
+            } else {
+                // 缺失、0 字节、大小对不上：都不可信
+                try { Files.deleteIfExists(seg); } catch (IOException ignored) { }
+                sizes[i] = 0;
+            }
+        }
+        meta.sizes = sizes;
+        final HlsMeta metaRef = meta;
+
         AtomicInteger doneCount = new AtomicInteger();
         AtomicLong bytes = new AtomicLong();
-        for (int i = 0; i < total; i++) {
-            if (Files.exists(workDir.resolve(i + ".seg"))) {
+        for (long s : sizes) {
+            if (s > 0) {
                 doneCount.incrementAndGet();
-                bytes.addAndGet(Files.size(workDir.resolve(i + ".seg")));
+                bytes.addAndGet(s);
             }
         }
         t.done = bytes.get();
@@ -101,13 +142,20 @@ public final class Hls {
             for (int i = 0; i < total; i++) {
                 final int idx = i;
                 final Seg seg = segs.get(i);
-                if (Files.exists(workDir.resolve(idx + ".seg"))) continue;
+                if (sizes[idx] > 0) continue;
                 futures.add(pool.submit(() -> {
                     try {
-                        downloadSeg(engine, t, seg, workDir.resolve(idx + ".seg"));
+                        Path target = workDir.resolve(idx + ".seg");
+                        downloadSeg(engine, t, seg, target);
+                        long size = Files.size(target);
+                        if (size <= 0) throw new IOException("分片 " + idx + " 是空的");
+                        synchronized (metaRef) {
+                            metaRef.sizes[idx] = size;
+                            metaRef.save(metaFile);
+                        }
                         int d = doneCount.incrementAndGet();
                         t.stage = "HLS 分片 " + d + "/" + total;
-                        bytes.addAndGet(Files.size(workDir.resolve(idx + ".seg")));
+                        bytes.addAndGet(size);
                         t.done = bytes.get();
                         engine.fireNow();
                     } catch (Exception e) {
@@ -134,13 +182,29 @@ public final class Hls {
 
         if (t.pauseRequested || t.cancelRequested) throw new Engine.PauseSignal();
 
+        // 拼接前逐片复核：任何一片缺失/为空/大小与记录不符，都不能进入成品
+        long expectedTotal = 0;
+        for (int i = 0; i < total; i++) {
+            Path p = workDir.resolve(i + ".seg");
+            if (!Files.isRegularFile(p)) throw new IOException("HLS 分片 " + i + " 缺失，已停止拼接");
+            long actual = Files.size(p);
+            if (actual <= 0) throw new IOException("HLS 分片 " + i + " 是空的，已停止拼接");
+            if (sizes[i] > 0 && actual != sizes[i]) {
+                throw new IOException("HLS 分片 " + i + " 大小不符（记录 " + sizes[i]
+                        + "，实际 " + actual + "），已停止拼接");
+            }
+            expectedTotal += actual;
+        }
+
         t.stage = "拼接分片";
         engine.fireNow();
         try (OutputStream out = Files.newOutputStream(merged)) {
             for (int i = 0; i < total; i++) {
-                Path p = workDir.resolve(i + ".seg");
-                Files.copy(p, out);
+                Files.copy(workDir.resolve(i + ".seg"), out);
             }
+        }
+        if (Files.size(merged) != expectedTotal) {
+            throw new IOException("HLS 拼接后大小不符：预期 " + expectedTotal + "，实际 " + Files.size(merged));
         }
 
         // 能无转码封装就封装，失败就保留 .ts（播放器基本都认）
@@ -338,6 +402,11 @@ public final class Hls {
         }
     };
 
+    /**
+     * 下载单个分片：先写 {@code <index>.seg.part}，完整写完并关闭后再原子改名为
+     * {@code <index>.seg}。进程在写文件中途被杀，留下的 .part 会在下次启动时删除，
+     * 不会被当成完整分片拼接。
+     */
     private static void downloadSeg(Engine engine, Task t, Seg seg, Path out) throws Exception {
         if (t.pauseRequested || t.cancelRequested) throw new Engine.PauseSignal();
         byte[] data = fetchBytes(engine, seg.url);
@@ -366,9 +435,82 @@ public final class Hls {
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(key, "AES"), new IvParameterSpec(iv));
             data = cipher.doFinal(data);
         }
-        try (OutputStream os = Files.newOutputStream(out)) {
-            os.write(data);
+        if (data.length == 0) throw new IOException("HLS 分片内容为空");
+        Path part = out.resolveSibling(out.getFileName() + ".part");
+        try {
+            Files.deleteIfExists(part);
+            try (OutputStream os = Files.newOutputStream(part)) {
+                os.write(data);
+                os.flush();
+            }
+            try {
+                Files.move(part, out, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (Exception e) {
+                Files.move(part, out, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            try { Files.deleteIfExists(part); } catch (IOException ignored) { }
         }
+    }
+
+    /** 播放列表指纹与分片大小，用于判断上次的工作目录还能不能复用。 */
+    static final class HlsMeta {
+        String playlistUrl = "";
+        String playlistSha256 = "";
+        int count;
+        long[] sizes = new long[0];
+
+        static HlsMeta load(Path file) {
+            try {
+                Map<String, Object> m = Json.map(Json.parse(new String(Files.readAllBytes(file), StandardCharsets.UTF_8)));
+                HlsMeta meta = new HlsMeta();
+                meta.playlistUrl = Json.str(m, "playlistUrl", "");
+                meta.playlistSha256 = Json.str(m, "playlistSha256", "");
+                meta.count = Json.i(m, "count", 0);
+                List<Object> list = Json.list(m.get("sizes"));
+                meta.sizes = new long[list.size()];
+                for (int i = 0; i < list.size(); i++) {
+                    meta.sizes[i] = Json.num(Json.map(list.get(i)), "size", 0);
+                }
+                return meta;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        void save(Path file) {
+            List<Object> list = new ArrayList<>();
+            for (int i = 0; i < sizes.length; i++) {
+                list.add(Json.obj("index", i, "size", sizes[i]));
+            }
+            try {
+                Util.atomicWrite(file, Json.write(Json.obj(
+                        "playlistUrl", playlistUrl,
+                        "playlistSha256", playlistSha256,
+                        "count", count,
+                        "sizes", list
+                )).getBytes(StandardCharsets.UTF_8));
+            } catch (IOException ignored) { }
+        }
+    }
+
+    private static String sha256Text(String s) {
+        try {
+            return Util.hex(MessageDigest.getInstance("SHA-256").digest(s.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
+        }
+    }
+
+    private static void clearSegments(Path workDir) {
+        try (java.util.stream.Stream<Path> stream = Files.list(workDir)) {
+            stream.filter(p -> {
+                String n = p.getFileName().toString();
+                return n.endsWith(".seg") || n.endsWith(".seg.part");
+            }).forEach(p -> {
+                try { Files.deleteIfExists(p); } catch (IOException ignored) { }
+            });
+        } catch (IOException ignored) { }
     }
 
     // ------------------------------------------------------------------ ffmpeg

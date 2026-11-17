@@ -32,6 +32,9 @@ public final class Task {
     public String signer = "";             // APK 签名证书 SHA-256
     public String scheme = "";             // v1/v2/v3
     public String signerSubject = "";
+    public String signature = "";          // verified | failed | unsupported | none
+    public String signatureDetail = "";
+    public String warning = "";            // 未验证 / 已跳过等需要显式提示的信息
     public String gid = "";                // BT 任务在 aria2 里的 id
     public boolean resumeOnStart = false;  // 上次退出时是否正在下载（用于开机自动续传）
     public transient boolean nameAuto = false;  // 名字是从 URL 猜的，允许被 Content-Disposition 覆盖
@@ -98,6 +101,9 @@ public final class Task {
         m.put("signer", signer);
         m.put("scheme", scheme);
         m.put("signerSubject", signerSubject);
+        m.put("signature", signature);
+        m.put("signatureDetail", signatureDetail);
+        m.put("warning", warning);
         m.put("speed", speed);
         m.put("eta", eta);
         m.put("stage", stage);
@@ -140,6 +146,9 @@ public final class Task {
         t.signer = Json.str(m, "signer", "");
         t.scheme = Json.str(m, "scheme", "");
         t.signerSubject = Json.str(m, "signerSubject", "");
+        t.signature = Json.str(m, "signature", "");
+        t.signatureDetail = Json.str(m, "signatureDetail", "");
+        t.warning = Json.str(m, "warning", "");
         t.gid = Json.str(m, "gid", "");
         t.resumeOnStart = Json.bool(m, "resumeOnStart", false);
         for (Object o : Json.list(m.get("segments"))) {

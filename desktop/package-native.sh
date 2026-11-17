@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="3.1.0"
+VERSION="3.1.1"
 JAR="DownloadGuard-Desktop-$VERSION.jar"
 OUT="native"
 

@@ -39,7 +39,7 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.1.0";
+    public static final String VERSION = "3.1.1";
 
     /**
      * 单个分段允许的最大重连次数。
@@ -61,6 +61,7 @@ public final class Engine {
     private final Map<String, Task> index = new ConcurrentHashMap<>();
     private final Set<String> active = ConcurrentHashMap.newKeySet();
     private final SpeedLimiter limiter = new SpeedLimiter();
+    private final Object queueLock = new Object();
     private final List<Listener> listeners = new ArrayList<>();
     private final AtomicLong lastPersist = new AtomicLong(0);
     private volatile boolean shutdown = false;
@@ -71,8 +72,183 @@ public final class Engine {
         this.settings = store.loadSettings();
         limiter.setRate(settings.speedLimitKB * 1024);
         for (Task t : store.loadTasks()) {
+            // 老版本的任务可能没有 dir 或目录已被删除：统一收敛到当前保存目录，
+            // 不让后续 createDirectories 在进程工作目录里凭空建目录
+            try {
+                t.dir = DirGuard.resolveWritable(t.dir, allowedRoots(), defaultDir()).toString();
+            } catch (Exception e) {
+                t.dir = settings.saveDir;
+            }
             tasks.add(t);
             index.put(t.id, t);
+        }
+        recoverFromMeta();
+    }
+
+    /**
+     * 启动时对齐「任务记录」和「真实临时文件」。
+     *
+     * <p>旧实现只写 meta 不读，恢复完全依赖 tasks.json；如果 part 已经被移动/清理而
+     * segments 还写着 done=size，下一轮会新建 RandomAccessFile 并 setLength(size)，
+     * 产出一个全零文件然后当成功收尾。这里的原则：
+     * <ul>
+     *   <li>meta 比 tasks.json 更接近实时进度，能对上就采用 meta；</li>
+     *   <li>part 不存在或大小不符时，任何 done 都不可信，分段全部清零；</li>
+     *   <li>completed 任务只有在目标文件仍存在且非空时才保留状态。</li>
+     * </ul>
+     */
+    private void recoverFromMeta() {
+        Set<String> known = ConcurrentHashMap.newKeySet();
+        for (Task t : snapshot()) {
+            known.add(t.id);
+            if ("HLS".equals(t.kind) || "BT".equals(t.kind)) continue;
+            mergeMeta(t);
+            repairPart(t);
+        }
+        // tasks.json 损坏时 Store 会把它备份后返回空列表；只要 meta 还在，
+        // 至少能把任务（URL/文件名/断点）恢复成暂停状态，让用户手动继续。
+        try (java.util.stream.Stream<Path> stream = Files.list(store.partsDir)) {
+            stream.filter(p -> p.getFileName().toString().endsWith(".meta.json"))
+                    .forEach(p -> {
+                        String file = p.getFileName().toString();
+                        String id = file.substring(0, file.length() - ".meta.json".length());
+                        if (known.contains(id)) return;
+                        Task t = taskFromMeta(id, p);
+                        if (t != null) {
+                            tasks.add(t);
+                            index.put(t.id, t);
+                        }
+                    });
+        } catch (IOException ignored) { }
+    }
+
+    private void mergeMeta(Task t) {
+        Map<String, Object> meta = readMeta(t);
+        if (meta == null) return;
+        long size = Json.num(meta, "size", 0);
+        if (t.size <= 0 && size > 0) t.size = size;
+        if (!t.name.isEmpty()) {
+            // 保留 tasks.json 里的展示名
+        } else {
+            t.name = Json.str(meta, "name", t.name);
+        }
+        List<Object> list = Json.list(meta.get("segments"));
+        if (list.isEmpty()) return;
+        List<Task.Seg> fromMeta = new ArrayList<>();
+        for (Object o : list) {
+            Map<String, Object> sm = Json.map(o);
+            fromMeta.add(new Task.Seg(Json.num(sm, "start", 0), Json.num(sm, "end", 0),
+                    Json.num(sm, "done", 0)));
+        }
+        if (t.segs.isEmpty()) {
+            t.segs = fromMeta;
+        } else if (sameLayout(t.segs, fromMeta)) {
+            // 取两者较大的 done：meta 每 700ms 写一次，通常比 tasks.json 新
+            for (int i = 0; i < t.segs.size(); i++) {
+                long d = Math.min(fromMeta.get(i).done, t.segs.get(i).length());
+                if (d > t.segs.get(i).done) t.segs.get(i).done = d;
+            }
+        }
+        t.done = t.totalDone();
+    }
+
+    private static boolean sameLayout(List<Task.Seg> a, List<Task.Seg> b) {
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i).start != b.get(i).start || a.get(i).end != b.get(i).end) return false;
+        }
+        return true;
+    }
+
+    private void repairPart(Task t) {
+        Path part = store.partPath(t);
+        boolean partOk = Files.isRegularFile(part);
+        long partSize = 0;
+        if (partOk) {
+            try { partSize = Files.size(part); } catch (IOException e) { partSize = 0; }
+        }
+        if (partOk && partSize > 0) {
+            if (t.size > 0 && partSize != t.size) {
+                // 临时文件与记录不一致：分段位置全部不可信，删掉重下
+                t.segs.clear();
+                t.done = 0;
+                t.status = "paused";
+                t.warning = "临时文件大小与断点记录不一致，已重置，续传会从头开始";
+                try { Files.deleteIfExists(part); } catch (IOException ignored) { }
+            }
+            return;
+        }
+
+        // part 不存在或 0 字节：如果目标文件已经落地，保留 completed；否则断点作废
+        if ("completed".equals(t.status) && !t.finalPath.isEmpty()) {
+            try {
+                Path done = java.nio.file.Paths.get(t.finalPath);
+                if (Files.isRegularFile(done) && Files.size(done) > 0) return;
+            } catch (Exception ignored) { }
+        }
+        boolean hadProgress = t.segs.stream().anyMatch(s -> s.done > 0);
+        t.segs.clear();
+        t.done = 0;
+        if (hadProgress || "completed".equals(t.status) || "error".equals(t.status)) {
+            t.status = "paused";
+            t.resumeOnStart = false;
+            t.warning = "上次的临时文件已不存在，断点已重置，请重新开始下载";
+        }
+        try { Files.deleteIfExists(part); } catch (IOException ignored) { }
+    }
+
+    private Map<String, Object> readMeta(Task t) {
+        try {
+            String text = new String(Files.readAllBytes(store.metaPath(t)), StandardCharsets.UTF_8);
+            return Json.map(Json.parse(text));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Task taskFromMeta(String id, Path metaFile) {
+        try {
+            Map<String, Object> m = Json.map(Json.parse(new String(Files.readAllBytes(metaFile), StandardCharsets.UTF_8)));
+            String url = Json.str(m, "url", "");
+            if (url.isEmpty()) return null;
+            Task t = new Task();
+            t.id = id;
+            t.url = url;
+            t.name = Json.str(m, "name", Util.nameFromUrl(url));
+            t.size = Json.num(m, "size", 0);
+            try {
+                t.dir = DirGuard.resolveWritable(Json.str(m, "dir", ""), allowedRoots(), defaultDir()).toString();
+            } catch (Exception e) {
+                t.dir = settings.saveDir;
+            }
+            t.kind = url.startsWith("magnet:") ? "BT"
+                    : (url.toLowerCase(Locale.ROOT).contains(".m3u8") ? "HLS" : "HTTP");
+            t.status = "paused";
+            t.resumeOnStart = false;
+            t.warning = "任务列表损坏，已从断点元数据恢复；请确认后继续";
+            for (Object o : Json.list(m.get("segments"))) {
+                Map<String, Object> sm = Json.map(o);
+                t.segs.add(new Task.Seg(Json.num(sm, "start", 0), Json.num(sm, "end", 0),
+                        Json.num(sm, "done", 0)));
+            }
+            t.done = t.totalDone();
+            return t;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** 当前允许写入的根目录（保存目录 + 用户显式添加的目录），已解析真实路径。 */
+    public List<Path> allowedRoots() {
+        return DirGuard.allowedRoots(settings);
+    }
+
+    /** 默认保存目录的 canonical 形式；配置本身损坏时退回用户主目录下的 Downloads。 */
+    public Path defaultDir() throws IOException {
+        try {
+            return DirGuard.canonical(settings.saveDir);
+        } catch (Exception e) {
+            return DirGuard.canonical(Settings.defaultSaveDir());
         }
     }
 
@@ -179,7 +355,12 @@ public final class Engine {
         String u = url == null ? "" : url.trim();
         Task t = new Task();
         t.url = u;
-        t.dir = (dir == null || dir.trim().isEmpty()) ? settings.saveDir : dir.trim();
+        try {
+            // 目录是请求里带来的，必须按白名单解析；非法路径直接拒绝，不创建任何目录
+            t.dir = DirGuard.resolveWritable(dir, allowedRoots(), defaultDir()).toString();
+        } catch (IOException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
         t.connections = conn > 0 ? Math.min(32, conn) : settings.connections;
         t.expectedSha256 = expectedSha == null ? "" : expectedSha.trim().toLowerCase(Locale.ROOT);
         t.kind = u.startsWith("magnet:") ? "BT" : (u.toLowerCase(Locale.ROOT).contains(".m3u8") ? "HLS" : "HTTP");
@@ -199,7 +380,11 @@ public final class Engine {
         Task t = new Task();
         t.kind = "BT";
         t.name = Torrent.nameOfTorrent(data, fileName);
-        t.dir = (dir == null || dir.trim().isEmpty()) ? settings.saveDir : dir.trim();
+        try {
+            t.dir = DirGuard.resolveWritable(dir, allowedRoots(), defaultDir()).toString();
+        } catch (IOException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
         t.url = "torrent:" + t.name;
         t.connections = 1;
         t.status = "queued";
@@ -341,13 +526,17 @@ public final class Engine {
     // ------------------------------------------------------------------ 调度
 
     private void startQueued() {
-        if (shutdown) return;
-        int limit = Math.max(1, settings.maxConcurrent);
-        for (Task t : snapshot()) {
-            if (active.size() >= limit) break;
-            if (!"queued".equals(t.status)) continue;
-            if (active.contains(t.id)) continue;
-            launch(t);
+        // 「统计 active + 启动」必须在同一把锁里完成：多个任务同时结束时会并发调用这里，
+        // 分开判断会让 running 数量超过 maxConcurrent。
+        synchronized (queueLock) {
+            if (shutdown) return;
+            int limit = Math.max(1, settings.maxConcurrent);
+            for (Task t : snapshot()) {
+                if (active.size() >= limit) break;
+                if (!"queued".equals(t.status)) continue;
+                if (active.contains(t.id)) continue;
+                launch(t);
+            }
         }
     }
 
@@ -359,6 +548,9 @@ public final class Engine {
         t.pauseRequested = false;
         t.cancelRequested = false;
         t.stage = "";
+        t.warning = "";
+        t.signature = "";
+        t.signatureDetail = "";
         Thread th = new Thread(() -> runTask(t), "task-" + shortId(t));
         th.setDaemon(true);
         th.start();
@@ -419,6 +611,13 @@ public final class Engine {
         PauseSignal() { super("paused"); }
     }
 
+    /** 分段请求收到 200：服务器忽略了 Range，必须整体降级为单流。 */
+    static final class RangeIgnored extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
+        RangeIgnored() { super("服务器忽略了 Range"); }
+    }
+
     // ------------------------------------------------------------------ HTTP 下载
 
     private void downloadHttp(Task t) throws Exception {
@@ -455,16 +654,53 @@ public final class Engine {
 
         Path part = store.partPath(t);
         Files.createDirectories(java.nio.file.Paths.get(t.dir));
+        // 兜底：part 不在（被清理/移动）而分段还写着进度时，不能直接 setLength 出一个全零文件
+        if (t.segs.stream().anyMatch(s -> s.done > 0)
+                && (!Files.exists(part) || Files.size(part) == 0)) {
+            t.segs.clear();
+            t.done = 0;
+        }
         if (t.size > 0 && Files.exists(part) && Files.size(part) != t.size && t.segs.isEmpty()) {
             // 没有分段记录但残留了不同大小的临时文件：不可信，重来
             Files.delete(part);
         }
 
-        if (t.segs.isEmpty()) {
-            t.segs = planSegments(t.size, t.connections, t.rangeSupported);
+        // 未知长度（chunked / 没有 Content-Length）或不支持 Range：只能从 0 顺序读到 EOF。
+        // 旧实现会规划一个长度 1 的分段，结果 1MB 的文件只写 1 字节还报 completed。
+        boolean singleStream = t.size <= 0 || !t.rangeSupported;
+        if (singleStream) {
+            if (!t.segs.isEmpty()) {
+                t.segs.clear();
+                t.done = 0;
+                Files.deleteIfExists(part);
+            }
+            downloadSingle(t, part);
+        } else {
+            if (t.segs.isEmpty()) {
+                t.segs = planSegments(t.size, t.connections, true);
+            }
+            t.done = t.totalDone();
+            try {
+                downloadSegmented(t, part);
+            } catch (RangeIgnored e) {
+                // 服务器对 Range 请求回了 200 全量：立刻放弃分段，清空临时文件改走单流，
+                // 绝不能让多个 worker 把全量数据写到不同偏移
+                t.segs.clear();
+                t.done = 0;
+                t.rangeSupported = false;
+                Files.deleteIfExists(part);
+                downloadSingle(t, part);
+            }
         }
-        t.done = t.totalDone();
 
+        if (t.pauseRequested) {
+            saveMeta(t);
+            throw new PauseSignal();
+        }
+        finalizeFile(t, part);
+    }
+
+    private void downloadSegmented(Task t, Path part) throws Exception {
         try (RandomAccessFile raf = new RandomAccessFile(part.toFile(), "rw")) {
             if (t.size > 0 && raf.length() != t.size) raf.setLength(t.size);
             List<Future<?>> futures = new ArrayList<>();
@@ -494,6 +730,10 @@ public final class Engine {
                         if (cause instanceof RuntimeException && cause.getCause() instanceof PauseSignal) {
                             throw new PauseSignal();
                         }
+                        if (cause instanceof RuntimeException && cause.getCause() instanceof RangeIgnored) {
+                            throw (RangeIgnored) cause.getCause();
+                        }
+                        if (cause instanceof RangeIgnored) throw (RangeIgnored) cause;
                         throw new IOException(cause == null ? e.getMessage() : cause.getMessage(), cause);
                     }
                 }
@@ -502,12 +742,97 @@ public final class Engine {
                 try { io.awaitTermination(3, TimeUnit.SECONDS); } catch (InterruptedException ignored) { }
             }
         }
+    }
 
-        if (t.pauseRequested) {
-            saveMeta(t);
-            throw new PauseSignal();
+    /**
+     * 单流下载：从 0 顺序读到 EOF，边读边写盘。
+     *
+     * <p>用于两种服务器：没有 Content-Length 的 chunked 响应，以及明确不支持 Range 的服务器。
+     * 已知长度时如果连接提前断开，会尽量用 Range 从断点续；不支持 Range 就从头重来，
+     * 重试 3 次仍不完整就报错——绝不会把半截文件交给收尾流程。
+     */
+    private void downloadSingle(Task t, Path part) throws Exception {
+        long expected = t.size;
+        long written = 0;
+        int restarts = 0;
+        byte[] buf = new byte[128 * 1024];
+        try (RandomAccessFile raf = new RandomAccessFile(part.toFile(), "rw")) {
+            raf.setLength(0);
+            while (true) {
+                if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
+                String range = written > 0 && t.rangeSupported ? "bytes=" + written + "-" : null;
+                HttpURLConnection c = open(t.url, range);
+                int code = c.getResponseCode();
+                if (code == 206) {
+                    // 正常续传，但要核对起点：服务器回 206 却从 0 开始，等于把前半段又写一遍
+                    String cr = c.getHeaderField("Content-Range");
+                    long start = parseRangeStart(cr);
+                    if (start != written) {
+                        if (start == 0) {
+                            written = 0;
+                            raf.setLength(0);
+                        } else {
+                            c.disconnect();
+                            throw new IOException("服务器返回了错误的续传起点（请求 " + written
+                                    + "，实际 " + start + "），已停止以免拼出坏文件");
+                        }
+                    }
+                } else if (code == 200) {
+                    if (written > 0) {
+                        // 服务器忽略了 Range：它给的是从 0 开始的完整文件，之前写的作废
+                        written = 0;
+                        raf.setLength(0);
+                    }
+                } else if (code == 416 && expected > 0 && written >= expected) {
+                    c.disconnect();
+                    break;
+                } else {
+                    String msg = DownloadErrors.forHttp(code, t.url);
+                    c.disconnect();
+                    throw new IOException(msg);
+                }
+                try (InputStream in = c.getInputStream()) {
+                    raf.seek(written);
+                    while (true) {
+                        if (t.pauseRequested || t.cancelRequested || shutdown) throw new PauseSignal();
+                        int n = in.read(buf);
+                        if (n < 0) break;
+                        limiter.acquire(n);
+                        raf.write(buf, 0, n);
+                        written += n;
+                        t.done = written;
+                        if (expected > 0 && written >= expected) break;
+                    }
+                } finally {
+                    c.disconnect();
+                }
+                if (expected > 0) {
+                    if (written == expected) break;
+                    if (written > expected) {
+                        throw new IOException("服务器返回的数据比声明的长度多（" + written + " > " + expected + "）");
+                    }
+                    if (++restarts > 3) {
+                        throw new IOException("下载不完整：服务器只给了 " + written + " / " + expected
+                                + " 字节，重试 " + (restarts - 1) + " 次仍失败");
+                    }
+                    if (!t.rangeSupported) {
+                        written = 0;
+                        raf.setLength(0);
+                    }
+                    Thread.sleep(500L * restarts);
+                    continue;
+                }
+                // 未知长度：读到 EOF 就是完整的；但空响应必须报错，不能产出 0 字节文件
+                if (written <= 0) throw new IOException("服务器返回了空文件");
+                t.size = written;
+                break;
+            }
         }
-        finalizeFile(t, part);
+        t.segs.clear();
+        t.segs.add(new Task.Seg(0, Math.max(0, written - 1), written));
+        t.done = written;
+        if (t.size <= 0) t.size = written;
+        saveMeta(t);
     }
 
     private void fetchSegment(Task t, Task.Seg seg, RandomAccessFile raf) throws Exception {
@@ -529,6 +854,21 @@ public final class Engine {
             }
             boolean partial = code == 206;
             boolean wholeOk = code == 200 && t.segs.size() == 1 && seg.start == 0;
+            if (partial) {
+                // 必须核对服务器真的从请求的偏移开始给数据。只认「206」不看 Content-Range，
+                // 会把「每次都从 0 发 512KB」的服务器拼成「前 512KB 重复两遍、长度却正确」的坏文件。
+                String cr = c.getHeaderField("Content-Range");
+                if (cr == null || !cr.startsWith("bytes " + from + "-")) {
+                    c.disconnect();
+                    throw new RangeIgnored();
+                }
+            }
+            if (code == 200 && t.segs.size() > 1) {
+                // 多分段时收到 200 是最危险的情况：多个 worker 都会把完整文件写到自己的偏移上。
+                // 立刻放弃分段，交给上层改走单流。
+                c.disconnect();
+                throw new RangeIgnored();
+            }
             if (!partial && !wholeOk) {
                 String msg = DownloadErrors.forHttp(code, t.url);
                 c.disconnect();
@@ -543,6 +883,7 @@ public final class Engine {
                     throw new IOException("服务器不支持断点续传，且连接反复中断，请换个网络环境重试");
                 }
                 seg.done = 0;
+                synchronized (raf) { raf.setLength(0); }
             }
             long written = 0;
             try (InputStream in = c.getInputStream()) {
@@ -583,6 +924,21 @@ public final class Engine {
                 if (budget != null) throw new IOException(budget);
                 Thread.sleep(Math.min(4000, 400L * Math.max(1, attempt)));
             }
+        }
+    }
+
+    /** 从 {@code bytes 123-456/789} 里取出起始偏移；解析不出来返回 -1。 */
+    static long parseRangeStart(String contentRange) {
+        if (contentRange == null) return -1;
+        String s = contentRange.trim();
+        if (!s.regionMatches(true, 0, "bytes ", 0, 6)) return -1;
+        s = s.substring(6).trim();
+        int dash = s.indexOf('-');
+        if (dash <= 0) return -1;
+        try {
+            return Long.parseLong(s.substring(0, dash).trim());
+        } catch (NumberFormatException e) {
+            return -1;
         }
     }
 
@@ -690,8 +1046,14 @@ public final class Engine {
 
     static List<Task.Seg> planSegments(long size, int connections, boolean range) {
         List<Task.Seg> segs = new ArrayList<>();
-        if (size <= 0 || !range || connections <= 1) {
-            segs.add(new Task.Seg(0, Math.max(0, size - 1), 0));
+        if (size <= 0) {
+            // 长度未知不能用「0..0」占位：1 字节的段会让单流循环只读 1 字节。
+            // 单流下载不使用分段（下载完再回填一段真实区间）。
+            segs.add(new Task.Seg(0, -1, 0));
+            return segs;
+        }
+        if (!range || connections <= 1) {
+            segs.add(new Task.Seg(0, size - 1, 0));
             return segs;
         }
         int n = (int) Math.min(connections, Math.max(1, size / (2L * 1024 * 1024)));
@@ -710,10 +1072,37 @@ public final class Engine {
 
     void finalizeFile(Task t, Path part) throws Exception {
         t.status = "verifying";
-        t.stage = "计算 SHA-256";
+        t.stage = "检查文件完整性";
         fire();
 
+        // 收尾闸门：不存在 / 0 字节 / 与声明长度不符，都不能进入哈希与 completed。
+        // 旧实现直接 Files.size(part) 然后覆盖 t.size，截断文件也能显示「校验通过」。
+        if (!Files.exists(part)) {
+            t.status = "error";
+            t.error = "下载临时文件不见了（可能被清理或移动），请重试";
+            persist(true);
+            fire();
+            return;
+        }
         long size = Files.size(part);
+        if (size <= 0) {
+            t.status = "error";
+            t.error = "下载结果是空文件，已停止（服务器可能返回了错误页）";
+            try { Files.deleteIfExists(part); } catch (IOException ignored) { }
+            persist(true);
+            fire();
+            return;
+        }
+        if (t.size > 0 && size != t.size) {
+            t.status = "error";
+            t.error = "下载不完整：预期 " + t.size + " 字节，实际 " + size + " 字节";
+            t.verify = "";
+            persist(true);
+            fire();
+            return;
+        }
+        t.stage = "计算 SHA-256";
+        fire();
         t.size = size;
         t.sha256 = Util.sha256(part, (done, total) -> {
             t.verifyDone = done;
@@ -723,11 +1112,14 @@ public final class Engine {
         t.stage = "检查文件结构";
         fire();
 
-        if (settings.verifyApk && t.name.toLowerCase(Locale.ROOT).endsWith(".apk")) {
+        boolean isApk = t.name.toLowerCase(Locale.ROOT).endsWith(".apk");
+        if (isApk && settings.verifyApk) {
             Integrity.Result r = Integrity.inspectApk(part);
             t.scheme = r.schemes;
             t.signer = r.certSha256;
             t.signerSubject = r.subject;
+            t.signature = r.signature;
+            t.signatureDetail = r.signatureDetail;
             if (!r.zipOk) {
                 t.status = "error";
                 t.error = "APK 压缩包结构损坏（" + r.detail + "），文件已隔离";
@@ -735,6 +1127,23 @@ public final class Engine {
                 persist(true);
                 return;
             }
+            if ("failed".equals(r.signature)) {
+                // 验签失败等同于文件不可信：不落地到下载目录，也不显示 completed
+                t.status = "error";
+                t.verify = "mismatch";
+                t.error = "APK 签名校验失败：" + r.signatureDetail + "，文件已隔离";
+                quarantine(t, part);
+                persist(true);
+                fire();
+                return;
+            }
+            if ("unsupported".equals(r.signature)) {
+                t.warning = "APK 签名未验证：" + r.signatureDetail;
+            }
+        } else if (isApk) {
+            t.signature = "unsupported";
+            t.signatureDetail = "设置里关闭了 APK 校验";
+            t.warning = "APK 签名未验证（设置里已关闭）";
         }
 
         if (!t.expectedSha256.isEmpty()) {
@@ -747,8 +1156,11 @@ public final class Engine {
                 fire();
                 return;
             }
+            t.verify = "ok";
+        } else {
+            // 没有外部基准就没有「校验通过」这回事，界面只显示已计算出的哈希
+            t.verify = "";
         }
-        t.verify = "ok";
 
         Path dir = java.nio.file.Paths.get(t.dir);
         Files.createDirectories(dir);
@@ -787,6 +1199,8 @@ public final class Engine {
             Map<String, Object> m = Json.obj(
                     "size", t.size,
                     "name", t.name,
+                    "url", t.url,
+                    "dir", t.dir,
                     "etag", t.etag,
                     "segments", segs(t)
             );

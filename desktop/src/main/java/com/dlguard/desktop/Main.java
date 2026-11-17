@@ -112,19 +112,27 @@ public final class Main {
 
         if (!store.lockInstance()) {
             int running = store.readInstancePort();
+            String runningToken = store.readInstanceToken();
             System.out.println();
             System.out.println("  已经有一个 DownloadGuard 在运行（数据目录 " + store.baseDir + "）。");
             if (running > 0) {
-                System.out.println("  直接打开：http://127.0.0.1:" + running + "/");
-                if (openBrowser) Util.browse("http://127.0.0.1:" + running + "/");
+                String url = "http://127.0.0.1:" + running + "/"
+                        + (runningToken.isEmpty() ? "" : "?token=" + runningToken);
+                System.out.println("  直接打开：" + url);
+                if (openBrowser) Util.browse(url);
             }
             System.out.println("  要开第二个实例，请加 --home 指定不同的数据目录。");
             return;
         }
         Engine engine = new Engine(store);
         if (dir != null && !dir.trim().isEmpty()) {
-            engine.settings.saveDir = dir.trim();
-            store.saveSettings(engine.settings);
+            try {
+                engine.settings.saveDir = DirGuard.canonical(dir.trim()).toString();
+                store.saveSettings(engine.settings);
+            } catch (Exception e) {
+                System.err.println("保存目录不可用：" + e.getMessage());
+                return;
+            }
         }
         if (port <= 0) port = engine.settings.port;
 
@@ -145,7 +153,8 @@ public final class Main {
         System.out.println();
         System.out.println("  DownloadGuard Desktop " + Engine.VERSION);
         System.out.println("  ---------------------------------------------");
-        System.out.println("  本机访问   " + server.localUrl());
+        System.out.println("  本机访问   " + server.cleanUrl() + "（首次请用下面的完整链接）");
+        System.out.println("  完整链接   " + server.localUrl());
         if (lan) {
             System.out.println("  手机/平板  " + server.lanUrl());
             System.out.println("             （同一 WiFi 下用手机浏览器打开，令牌已带在链接里）");

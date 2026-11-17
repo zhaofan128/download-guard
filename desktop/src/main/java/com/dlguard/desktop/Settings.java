@@ -2,12 +2,16 @@ package com.dlguard.desktop;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /** 桌面版设置项。改完立即生效，不需要重启。 */
 public final class Settings {
 
     public String saveDir = defaultSaveDir();
+    /** 用户显式添加的额外可写目录（默认目录之外）。 */
+    public List<String> allowedDirs = new ArrayList<>();
     public int maxConcurrent = 3;
     public int connections = 8;
     public long speedLimitKB = 0;        // 0 = 不限速
@@ -33,6 +37,7 @@ public final class Settings {
     public Map<String, Object> toMap() {
         return Json.obj(
                 "saveDir", saveDir,
+                "allowedDirs", new ArrayList<Object>(allowedDirs),
                 "maxConcurrent", maxConcurrent,
                 "connections", connections,
                 "speedLimitKB", speedLimitKB,
@@ -53,6 +58,10 @@ public final class Settings {
     public static Settings fromMap(Map<String, Object> m) {
         Settings s = new Settings();
         s.saveDir = Json.str(m, "saveDir", s.saveDir);
+        for (Object o : Json.list(m.get("allowedDirs"))) {
+            String d = String.valueOf(o).trim();
+            if (!d.isEmpty() && !s.allowedDirs.contains(d)) s.allowedDirs.add(d);
+        }
         s.maxConcurrent = clamp(Json.i(m, "maxConcurrent", s.maxConcurrent), 1, 10);
         s.connections = clamp(Json.i(m, "connections", s.connections), 1, 32);
         s.speedLimitKB = Math.max(0, Json.num(m, "speedLimitKB", s.speedLimitKB));

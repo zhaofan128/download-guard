@@ -15,12 +15,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -31,11 +40,26 @@ import java.util.concurrent.ThreadPoolExecutor;
  */
 public final class Server {
 
+    private static final String COOKIE = "dg_token";
+    private static final int AUTH_FAIL_LIMIT = 8;
+    private static final long AUTH_FAIL_WINDOW_MS = 60_000L;
+
     private final Engine engine;
     private final boolean lan;
     private final String token;
     private final List<String> extraHosts;
+    private final Map<String, Deque<Long>> authFails = new ConcurrentHashMap<>();
+    /** SSE 每个客户端会长期占用一个线程，必须和普通 API 分开，且限制总数。 */
+    private final ExecutorService ssePool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "sse-client");
+        t.setDaemon(true);
+        return t;
+    });
+    private final Semaphore sseSlots = new Semaphore(12);
+    private final Set<OutputStream> sseOutputs = ConcurrentHashMap.newKeySet();
+    private volatile boolean running = true;
     private HttpServer server;
+    private ThreadPoolExecutor httpPool;
     private int port;
 
     public Server(Engine engine, int port, boolean lan) throws IOException {
@@ -46,7 +70,8 @@ public final class Server {
         this.engine = engine;
         this.lan = lan;
         this.extraHosts = extraHosts;
-        this.token = lan ? newToken() : "";
+        // 本机模式同样要鉴权：127.0.0.1 对浏览器里的任何页面都是可达的
+        this.token = newToken();
         IOException last = null;
         for (int i = 0; i < 30; i++) {
             try {
@@ -59,23 +84,25 @@ public final class Server {
             }
         }
         if (server == null) throw last == null ? new IOException("端口被占用") : last;
-        ThreadPoolExecutor pool = (ThreadPoolExecutor) Executors.newFixedThreadPool(12);
-        server.setExecutor(pool);
+        httpPool = (ThreadPoolExecutor) Executors.newFixedThreadPool(24);
+        server.setExecutor(httpPool);
         server.createContext("/", this::handle);
     }
 
+    /** 32 字节 SecureRandom，Base64URL 无填充；不再是 nanoTime 的可猜摘要。 */
     private static String newToken() {
-        try {
-            return Util.hex(java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(String.valueOf(System.nanoTime()).getBytes(StandardCharsets.UTF_8))).substring(0, 24);
-        } catch (Exception e) {
-            return Long.toHexString(System.nanoTime());
-        }
+        byte[] bytes = new byte[32];
+        new SecureRandom().nextBytes(bytes);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     public int port() { return port; }
 
-    public String localUrl() { return "http://127.0.0.1:" + port + "/"; }
+    /** 首次打开用：带令牌，服务端会 Set-Cookie 后 302 到干净地址。 */
+    public String localUrl() { return "http://127.0.0.1:" + port + "/?token=" + token; }
+
+    /** 不带令牌的地址，只用于展示。 */
+    public String cleanUrl() { return "http://127.0.0.1:" + port + "/"; }
 
     public String lanUrl() {
         List<String> ips = Util.localIPv4();
@@ -87,16 +114,33 @@ public final class Server {
 
     public void start() { server.start(); }
 
-    public void stop() { server.stop(1); }
+    public void stop() {
+        running = false;
+        // 先关掉所有 SSE 输出，阻塞在 write/sleep 的处理线程会立刻退出
+        for (OutputStream os : sseOutputs) {
+            try { os.close(); } catch (IOException ignored) { }
+        }
+        sseOutputs.clear();
+        ssePool.shutdownNow();
+        if (httpPool != null) httpPool.shutdownNow();
+        server.stop(1);
+    }
 
     // ------------------------------------------------------------------ 路由
 
     private void handle(HttpExchange ex) {
+        boolean keepOpen = false;
         try {
-            ex.getResponseHeaders().add("X-Content-Type-Options", "nosniff");
-            ex.getResponseHeaders().add("Referrer-Policy", "no-referrer");
-            ex.getResponseHeaders().add("X-Frame-Options", "DENY");
-            ex.getResponseHeaders().add("Cross-Origin-Resource-Policy", "same-origin");
+            Headers h = ex.getResponseHeaders();
+            h.add("X-Content-Type-Options", "nosniff");
+            h.add("Referrer-Policy", "no-referrer");
+            h.add("X-Frame-Options", "DENY");
+            h.add("Cross-Origin-Resource-Policy", "same-origin");
+            // 前端没有内联脚本，只有少量动态 style 属性，CSP 可以收得很紧
+            h.add("Content-Security-Policy",
+                    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                            + "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+                            + "base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
             // 先判来源：本机端口对浏览器里的任何页面都是可达的，
             // 不判 Host/Origin 的话，一个 <form> 就能往这里塞下载任务。
             String host = ex.getRequestHeaders().getFirst("Host");
@@ -108,13 +152,56 @@ public final class Server {
                 return;
             }
             String path = ex.getRequestURI().getPath();
-            if (path.startsWith("/api/") || path.equals("/events")) {
-                if (!authorized(ex)) {
-                    json(ex, 403, Json.obj("ok", false, "error", "访问令牌无效，请使用启动时打印的完整链接打开"));
+            String method = ex.getRequestMethod();
+            // 不响应预检：跨源页面即使想带 X-DG-Token 也过不了浏览器这一关
+            if ("OPTIONS".equalsIgnoreCase(method)) {
+                json(ex, 403, Json.obj("ok", false, "error", "不响应跨源预检请求"));
+                return;
+            }
+            boolean stateChanging = !"GET".equalsIgnoreCase(method) && !"HEAD".equalsIgnoreCase(method);
+            if (path.startsWith("/api/") || path.equals("/events") || path.equals("/api/events")) {
+                if (!hasSessionToken(ex)) {
+                    denyAuth(ex);
+                    return;
+                }
+                clearAuthFails(ex);
+                // 双提交：状态变更必须带自定义头。浏览器跨源请求带这个头会先发预检，
+                // 而服务端不响应预检，所以 CSRF 在这一步就被挡住了。
+                if (stateChanging && !headerToken(ex)) {
+                    json(ex, 403, Json.obj("ok", false, "error", "缺少 X-DG-Token 请求头"));
+                    return;
+                }
+                if (!contentTypeOk(ex, path, stateChanging)) {
+                    json(ex, 415, Json.obj("ok", false, "error", "该接口只接受 application/json"));
+                    return;
+                }
+                if (path.equals("/events") || path.equals("/api/events")) {
+                    if (!"GET".equalsIgnoreCase(method)) {
+                        json(ex, 405, Json.obj("ok", false, "error", "事件流只支持 GET"));
+                        return;
+                    }
+                    if (!sseSlots.tryAcquire()) {
+                        json(ex, 503, Json.obj("ok", false, "error", "事件流连接数已满，请关闭多余页面"));
+                        return;
+                    }
+                    keepOpen = true;
+                    ssePool.execute(() -> {
+                        try {
+                            streamEvents(ex);
+                        } catch (Exception ignored) {
+                        } finally {
+                            sseSlots.release();
+                            try { ex.close(); } catch (Exception ignored) { }
+                        }
+                    });
                     return;
                 }
                 routeApi(ex, path);
             } else {
+                if (stateChanging) {
+                    json(ex, 405, Json.obj("ok", false, "error", "静态资源只支持 GET"));
+                    return;
+                }
                 serveStatic(ex, path);
             }
         } catch (Exception e) {
@@ -122,24 +209,100 @@ public final class Server {
                 json(ex, 500, Json.obj("ok", false, "error", String.valueOf(e.getMessage())));
             } catch (Exception ignored) { }
         } finally {
-            ex.close();
+            if (!keepOpen) ex.close();
         }
     }
 
-    private boolean authorized(HttpExchange ex) {
-        if (!lan) return true;
-        Map<String, String> q = query(ex.getRequestURI());
-        if (token.equals(q.get("token"))) return true;
-        String header = ex.getRequestHeaders().getFirst("X-DG-Token");
-        if (token.equals(header)) return true;
+    /** 状态变更只认 JSON；种子上传单独放行 octet-stream / multipart。 */
+    private static boolean contentTypeOk(HttpExchange ex, String path, boolean changing) {
+        if (!changing) return true;
+        String ct = ex.getRequestHeaders().getFirst("Content-Type");
+        String v = ct == null ? "" : ct.toLowerCase(Locale.ROOT).trim();
+        if (path.equals("/api/torrent")) {
+            return v.startsWith("application/octet-stream") || v.startsWith("multipart/form-data");
+        }
+        if (path.equals("/api/tasks") || path.equals("/api/settings")
+                || path.equals("/api/settings/save-dir")) {
+            return v.startsWith("application/json");
+        }
+        // 其余动作没有请求体（暂停/继续/打开目录…），token 头已经足够
+        return true;
+    }
+
+    private boolean hasSessionToken(HttpExchange ex) {
+        return headerToken(ex) || cookieToken(ex);
+    }
+
+    private boolean headerToken(HttpExchange ex) {
+        return sameToken(ex.getRequestHeaders().getFirst("X-DG-Token"));
+    }
+
+    private boolean cookieToken(HttpExchange ex) {
         String cookie = ex.getRequestHeaders().getFirst("Cookie");
-        if (cookie != null) {
-            for (String part : cookie.split(";")) {
-                String[] kv = part.trim().split("=", 2);
-                if (kv.length == 2 && "dg_token".equals(kv[0]) && token.equals(kv[1])) return true;
-            }
+        if (cookie == null) return false;
+        for (String part : cookie.split(";")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length == 2 && COOKIE.equals(kv[0]) && sameToken(kv[1])) return true;
         }
         return false;
+    }
+
+    private boolean queryToken(HttpExchange ex) {
+        return sameToken(query(ex.getRequestURI()).get("token"));
+    }
+
+    private boolean sameToken(String candidate) {
+        return candidate != null && !candidate.isEmpty()
+                && MessageDigest.isEqual(token.getBytes(StandardCharsets.UTF_8),
+                candidate.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private void denyAuth(HttpExchange ex) throws IOException {
+        String ip = clientIp(ex);
+        if (tooManyFails(ip)) {
+            ex.getResponseHeaders().add("Retry-After", "60");
+            json(ex, 429, Json.obj("ok", false, "error", "鉴权失败次数过多，请 1 分钟后再试"));
+            return;
+        }
+        noteFail(ip);
+        json(ex, 403, Json.obj("ok", false,
+                "error", "访问令牌无效，请使用启动时打印的完整链接打开"));
+    }
+
+    private void clearAuthFails(HttpExchange ex) {
+        authFails.remove(clientIp(ex));
+    }
+
+    private boolean tooManyFails(String ip) {
+        Deque<Long> q = authFails.get(ip);
+        if (q == null) return false;
+        synchronized (q) {
+            purge(q);
+            // 第 AUTH_FAIL_LIMIT 次失败时就返回 429：允许 7 次尝试，第 8 次开始限流
+            return q.size() >= AUTH_FAIL_LIMIT - 1;
+        }
+    }
+
+    private void noteFail(String ip) {
+        Deque<Long> q = authFails.computeIfAbsent(ip, k -> new ArrayDeque<>());
+        synchronized (q) {
+            long now = System.currentTimeMillis();
+            purge(q);
+            q.addLast(now);
+        }
+    }
+
+    private static void purge(Deque<Long> q) {
+        long cutoff = System.currentTimeMillis() - AUTH_FAIL_WINDOW_MS;
+        while (!q.isEmpty() && q.peekFirst() < cutoff) q.removeFirst();
+    }
+
+    private static String clientIp(HttpExchange ex) {
+        try {
+            return ex.getRemoteAddress().getAddress().getHostAddress();
+        } catch (Exception e) {
+            return "unknown";
+        }
     }
 
     private void routeApi(HttpExchange ex, String path) throws Exception {
@@ -174,21 +337,78 @@ public final class Server {
                 json(ex, 400, Json.obj("ok", false, "error", "没有可下载的链接"));
                 return;
             }
+            // 先整体解析目录再建任务：不能出现「前两个任务加进去了，第三个目录非法」的半成功
+            Path target;
+            try {
+                target = DirGuard.resolveWritable(dir, engine.allowedRoots(), engine.defaultDir());
+            } catch (Exception e) {
+                json(ex, 400, Json.obj("ok", false, "error", e.getMessage()));
+                return;
+            }
             List<String> ids = new ArrayList<>();
-            for (String u : urls) ids.add(engine.add(u, dir, conn, sha).id);
+            try {
+                for (String u : urls) ids.add(engine.add(u, target.toString(), conn, sha).id);
+            } catch (IllegalArgumentException e) {
+                json(ex, 400, Json.obj("ok", false, "error", e.getMessage()));
+                return;
+            }
             json(ex, 200, Json.obj("ok", true, "ids", ids));
             return;
         }
         if (path.equals("/api/settings") && "POST".equals(method)) {
             Map<String, Object> body = body(ex);
             Settings s = Settings.fromMap(body);
+            // 保存目录必须走单独的接口：这样一次设置保存里不会悄悄换掉写入根目录
+            String current;
+            try {
+                current = engine.defaultDir().toString();
+            } catch (Exception e) {
+                current = engine.settings.saveDir;
+            }
+            if (s.saveDir == null || s.saveDir.trim().isEmpty()) s.saveDir = engine.settings.saveDir;
+            String incoming = s.saveDir;
+            try {
+                incoming = DirGuard.canonical(incoming).toString();
+            } catch (Exception ignored) { }
+            if (!incoming.equals(current)) {
+                json(ex, 409, Json.obj("ok", false, "code", "use_save_dir_endpoint",
+                        "error", "修改保存目录请调用 /api/settings/save-dir"));
+                return;
+            }
+            s.saveDir = engine.settings.saveDir;
+            if (!body.containsKey("allowedDirs")) {
+                s.allowedDirs = new ArrayList<>(engine.settings.allowedDirs);
+            }
+            engine.applySettings(s);
+            json(ex, 200, Json.obj("ok", true, "settings", s.toMap()));
+            return;
+        }
+        if (path.equals("/api/settings/save-dir") && "POST".equals(method)) {
+            Map<String, Object> body = body(ex);
+            Path p;
+            try {
+                p = DirGuard.resolveNewSaveDir(Json.str(body, "dir", ""));
+            } catch (Exception e) {
+                json(ex, 400, Json.obj("ok", false, "error", e.getMessage()));
+                return;
+            }
+            Settings s = Settings.fromMap(engine.settings.toMap());
+            String old = s.saveDir;
+            s.saveDir = p.toString();
+            if (!s.allowedDirs.contains(old)) s.allowedDirs.add(old);
+            if (!s.allowedDirs.contains(p.toString())) s.allowedDirs.add(p.toString());
             engine.applySettings(s);
             json(ex, 200, Json.obj("ok", true, "settings", s.toMap()));
             return;
         }
         if (path.equals("/api/browse")) {
             Map<String, String> q = query(ex.getRequestURI());
-            json(ex, 200, browse(q.getOrDefault("path", engine.settings.saveDir)));
+            Map<String, Object> result = browse(q.getOrDefault("path", engine.settings.saveDir));
+            if (result == null) {
+                json(ex, 403, Json.obj("ok", false, "error", "只能浏览允许的保存目录"));
+                return;
+            }
+            json(ex, 200, result);
             return;
         }
         if (path.equals("/api/torrent") && "POST".equals(method)) {
@@ -198,7 +418,13 @@ public final class Server {
                 json(ex, 400, Json.obj("ok", false, "error", "种子文件是空的"));
                 return;
             }
-            Task t = engine.addTorrent(data, q.getOrDefault("name", "upload.torrent"), null);
+            Task t;
+            try {
+                t = engine.addTorrent(data, q.getOrDefault("name", "upload.torrent"), null);
+            } catch (IllegalArgumentException e) {
+                json(ex, 400, Json.obj("ok", false, "error", e.getMessage()));
+                return;
+            }
             json(ex, 200, Json.obj("ok", true, "id", t.id));
             return;
         }
@@ -271,28 +497,40 @@ public final class Server {
     // ------------------------------------------------------------------ 静态资源
 
     private void serveStatic(HttpExchange ex, String path) throws IOException {
-        // 开了局域网又没带令牌：给一张说明页，而不是让界面加载出来却调不通接口
-        if (lan && !authorized(ex)) {
-            byte[] page = ("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\">"
-                    + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-                    + "<title>需要访问令牌</title><body style=\"font-family:system-ui,-apple-system,'PingFang SC',sans-serif;"
-                    + "background:#0f1118;color:#eef0f9;display:grid;place-items:center;height:100vh;margin:0\">"
-                    + "<div style=\"max-width:420px;padding:28px;border:1px solid rgba(255,255,255,.12);"
-                    + "border-radius:18px;line-height:1.7\"><h2 style=\"margin:0 0 8px\">需要访问令牌</h2>"
-                    + "<p style=\"color:#a3a9c2;margin:0\">请用桌面版启动窗口里打印的完整链接打开，"
-                    + "链接里带有本次启动生成的令牌。</p></div></body></html>").getBytes(StandardCharsets.UTF_8);
-            ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
-            ex.sendResponseHeaders(403, page.length);
-            try (OutputStream os = ex.getResponseBody()) { os.write(page); }
+        if ("/".equals(path) || path.isEmpty()) {
+            // 首次带 token 打开：种 HttpOnly Cookie，然后 302 到干净地址，
+            // 令牌不会留在地址栏、历史记录和 Referer 里
+            if (queryToken(ex)) {
+                ex.getResponseHeaders().add("Set-Cookie",
+                        COOKIE + "=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000");
+                ex.getResponseHeaders().add("Location", "/");
+                ex.sendResponseHeaders(302, -1);
+                return;
+            }
+            if (!cookieToken(ex)) {
+                tokenPage(ex);
+                return;
+            }
+            byte[] page = readResource("index.html");
+            if (page == null) {
+                json(ex, 404, Json.obj("ok", false, "error", "资源不存在"));
+                return;
+            }
+            // 前端需要把 token 放进 X-DG-Token 请求头；HttpOnly Cookie 读不到，
+            // 所以只在同源页面里用 <meta> 注入（已配 CSP + X-Frame-Options: DENY）
+            String html = new String(page, StandardCharsets.UTF_8)
+                    .replace("__DG_TOKEN__", token);
+            byte[] data = html.getBytes(StandardCharsets.UTF_8);
+            Headers h = ex.getResponseHeaders();
+            h.add("Content-Type", "text/html; charset=utf-8");
+            h.add("Cache-Control", "no-store");
+            ex.sendResponseHeaders(200, data.length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(data); }
             return;
         }
-        if ("/".equals(path) || path.isEmpty()) {
-            Map<String, String> q = query(ex.getRequestURI());
-            if (lan && token.equals(q.get("token"))) {
-                Headers h = ex.getResponseHeaders();
-                h.add("Set-Cookie", "dg_token=" + token + "; Path=/; SameSite=Lax; Max-Age=2592000");
-            }
-            path = "/index.html";
+        if (!cookieToken(ex)) {
+            tokenPage(ex);
+            return;
         }
         if (path.contains("..")) {
             json(ex, 400, Json.obj("ok", false, "error", "非法路径"));
@@ -311,11 +549,27 @@ public final class Server {
         }
         Headers h = ex.getResponseHeaders();
         h.add("Content-Type", mime(name));
-        h.add("Cache-Control", name.equals("index.html") ? "no-cache" : "max-age=300");
+        h.add("Cache-Control", name.equals("index.html") ? "no-store" : "max-age=300");
         ex.sendResponseHeaders(200, data.length);
         try (OutputStream os = ex.getResponseBody()) {
             os.write(data);
         }
+    }
+
+    /** 没带令牌时的说明页：不包含 token，也不加载任何静态资源。 */
+    private void tokenPage(HttpExchange ex) throws IOException {
+        byte[] page = ("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<title>需要访问令牌</title><body style=\"font-family:system-ui,-apple-system,'PingFang SC',sans-serif;"
+                + "background:#0f1118;color:#eef0f9;display:grid;place-items:center;height:100vh;margin:0\">"
+                + "<div style=\"max-width:440px;padding:28px;border:1px solid rgba(255,255,255,.12);"
+                + "border-radius:18px;line-height:1.7\"><h2 style=\"margin:0 0 8px\">需要访问令牌</h2>"
+                + "<p style=\"color:#a3a9c2;margin:0\">请用桌面版启动时打印的完整链接打开。"
+                + "令牌每次启动都会更新，第一次打开后浏览器会记住 30 天。</p></div></body></html>")
+                .getBytes(StandardCharsets.UTF_8);
+        ex.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
+        ex.sendResponseHeaders(403, page.length);
+        try (OutputStream os = ex.getResponseBody()) { os.write(page); }
     }
 
     private byte[] readResource(String name) throws IOException {
@@ -353,15 +607,28 @@ public final class Server {
         h.add("Cache-Control", "no-cache");
         h.add("Connection", "keep-alive");
         ex.sendResponseHeaders(200, 0);
-        try (OutputStream os = ex.getResponseBody()) {
-            while (true) {
+        OutputStream os = ex.getResponseBody();
+        sseOutputs.add(os);
+        long lastBeat = System.currentTimeMillis();
+        try {
+            while (running) {
                 String payload = Json.write(decorate(engine.state()));
                 os.write(("data: " + payload + "\n\n").getBytes(StandardCharsets.UTF_8));
                 os.flush();
+                long now = System.currentTimeMillis();
+                if (now - lastBeat > 15_000) {
+                    // 心跳注释行：代理/浏览器不会把它当事件，但能保住连接
+                    os.write(": ping\n\n".getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                    lastBeat = now;
+                }
                 Thread.sleep(900);
             }
         } catch (Exception ignored) {
-            // 浏览器关页面/切后台就会断开，属于正常现象
+            // 浏览器关页面/切后台、服务停止都会走到这里，属于正常现象
+        } finally {
+            sseOutputs.remove(os);
+            try { os.close(); } catch (IOException ignored) { }
         }
     }
 
@@ -422,37 +689,58 @@ public final class Server {
         return map;
     }
 
-    /** 目录选择器数据源：只回目录，文件不回，避免 UI 里出现几万个文件名。 */
+    /**
+     * 目录选择器数据源：只回目录，文件不回，避免 UI 里出现几万个文件名。
+     *
+     * <p>返回 {@code null} 表示请求的路径不在允许范围内——调用方回 403，
+     * 而不是像旧实现那样悄悄退回用户主目录（那等于把整个家目录列给前端看）。
+     */
     private Map<String, Object> browse(String path) {
+        List<Path> allowed = engine.allowedRoots();
         Path dir;
         try {
-            dir = Paths.get(path == null || path.isEmpty() ? engine.settings.saveDir : path);
+            dir = DirGuard.resolveWritable(path, allowed, engine.defaultDir());
         } catch (Exception e) {
-            dir = Paths.get(engine.settings.saveDir);
+            return null;
         }
-        if (!Files.isDirectory(dir)) dir = Paths.get(System.getProperty("user.home", "."));
+        // 目录还没创建时，从最近的存在祖先开始浏览
+        Path probe = dir;
+        while (probe != null && !Files.isDirectory(probe)) probe = probe.getParent();
+        if (probe == null) return null;
+        dir = probe;
+
         List<Object> dirs = new ArrayList<>();
         try (java.util.stream.Stream<Path> stream = Files.list(dir)) {
             stream.filter(Files::isDirectory)
                     .sorted((a, b) -> a.getFileName().toString().compareToIgnoreCase(b.getFileName().toString()))
                     .limit(500)
-                    .forEach(p -> dirs.add(Json.obj("name", p.getFileName().toString(), "path", p.toString())));
+                    .forEach(p -> {
+                        // 软链到白名单之外的目录不列出来，避免「点进去就 403」的困惑
+                        try {
+                            Path real = p.toRealPath();
+                            for (Path root : allowed) {
+                                if (DirGuard.isUnder(real, root)) {
+                                    dirs.add(Json.obj("name", p.getFileName().toString(), "path", p.toString()));
+                                    break;
+                                }
+                            }
+                        } catch (Exception ignored) { }
+                    });
         } catch (Exception ignored) { }
+
         List<Object> roots = new ArrayList<>();
-        java.io.File[] rootFiles = java.io.File.listRoots();
-        if (rootFiles != null) {
-            for (java.io.File rf : rootFiles) {
-                roots.add(Json.obj("name", rf.getAbsolutePath(), "path", rf.getAbsolutePath()));
-            }
-        }
+        for (Path root : allowed) roots.add(Json.obj("name", root.toString(), "path", root.toString()));
         Path parent = dir.getParent();
+        boolean parentAllowed = false;
+        if (parent != null) {
+            for (Path root : allowed) if (DirGuard.isUnder(parent, root)) { parentAllowed = true; break; }
+        }
         return Json.obj(
                 "path", dir.toString(),
-                "parent", parent == null ? "" : parent.toString(),
+                "parent", parentAllowed ? parent.toString() : "",
                 "separator", java.io.File.separator,
                 "dirs", dirs,
-                "roots", roots,
-                "home", System.getProperty("user.home", "")
+                "roots", roots
         );
     }
 }

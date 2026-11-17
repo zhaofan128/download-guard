@@ -4,6 +4,7 @@
 
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const DG_TOKEN = ($('meta[name="dg-token"]') || {}).content || '';
 
   const state = {
     data: null,
@@ -81,7 +82,7 @@
   }
 
   async function api(path, body, method = 'POST') {
-    const opt = { method, headers: {} };
+    const opt = { method, headers: { 'X-DG-Token': DG_TOKEN } };
     if (body !== undefined) {
       opt.body = JSON.stringify(body);
       opt.headers['Content-Type'] = 'application/json';
@@ -344,17 +345,25 @@
     ref.chip.textContent = st.text;
 
     const meta = [];
-    meta.push(`<span><b>${fmtSize(t.size || t.done)}</b></span>`);
+    meta.push(t.size ? `<span><b>${fmtSize(t.size)}</b></span>` : `<span><b>大小未知</b></span>`);
     if (t.kind === 'HLS') meta.push('<span>HLS 分片</span>');
     if (t.kind === 'BT') meta.push('<span>BT / 磁力</span>');
     if (t.kind === 'HTTP' && t.connections) meta.push(`<span>${t.connections} 连接</span>`);
-    if (t.verify === 'ok' && t.sha256) meta.push('<span>SHA-256 已校验</span>');
-    if (t.scheme) meta.push(`<span>APK 签名 ${esc(t.scheme)}</span>`);
+    if (t.verify === 'ok' && t.sha256) meta.push('<span>SHA-256 与基准一致</span>');
+    if (t.signature) {
+      const label = t.signature === 'verified' ? 'APK 签名已验证'
+        : t.signature === 'failed' ? 'APK 签名校验失败'
+          : 'APK 签名未验证';
+      meta.push(`<span>${label}</span>`);
+    }
     const metaHtml = meta.join('<span class="dot">·</span>');
     if (ref.meta.innerHTML !== metaHtml) ref.meta.innerHTML = metaHtml;
 
     const p = pct(t);
-    ref.bar.style.width = p.toFixed(2) + '%';
+    // 服务器没给 Content-Length：显示不确定进度，不伪装成 0% 或某个假百分比
+    const unknown = !t.size && (t.status === 'downloading' || t.status === 'queued');
+    el.classList.toggle('is-unknown', unknown);
+    ref.bar.style.width = unknown ? '100%' : p.toFixed(2) + '%';
 
     if (t.status === 'downloading') {
       ref.live.textContent = fmtSpeed(t.speed);
@@ -459,7 +468,7 @@
     const st = STATUS[t.status] || STATUS.paused;
     const segs = t.segments || [];
     const rows = [
-      ['文件大小', fmtSize(t.size)],
+      ['文件大小', t.size ? fmtSize(t.size) : '未知（服务器未提供 Content-Length）'],
       ['已下载', fmtSize(t.done) + (t.size ? `（${pct(t).toFixed(1)}%）` : '')],
       ['连接数', t.connections || '—'],
       ['开始时间', fmtTime(t.createdAt)],
@@ -480,14 +489,19 @@
         <button class="icon-btn" data-copy="${esc(t.sha256)}" aria-label="复制 SHA-256">${icon('i-copy')}</button></div>
       </div>` : '';
 
-    const sigBlock = t.signer ? `
-      <div class="detail-block"><span>APK 签名证书 SHA-256（${esc(t.scheme || '未知方案')}）</span>
-        <div class="copy-row"><code>${esc(t.signer)}</code>
-        <button class="icon-btn" data-copy="${esc(t.signer)}" aria-label="复制证书指纹">${icon('i-copy')}</button></div>
+    const sigState = t.signature === 'verified' ? '已验证'
+      : t.signature === 'failed' ? '校验失败'
+        : t.signature === 'unsupported' ? '未验证' : '未验证';
+    const sigBlock = (t.signer || t.signatureDetail) ? `
+      <div class="detail-block"><span>APK 签名（${esc(t.scheme || '未知方案')}）· ${sigState}</span>
+        ${t.signer ? `<div class="copy-row"><code>${esc(t.signer)}</code>
+        <button class="icon-btn" data-copy="${esc(t.signer)}" aria-label="复制证书指纹">${icon('i-copy')}</button></div>` : ''}
         ${t.signerSubject ? `<code>${esc(t.signerSubject)}</code>` : ''}
+        ${t.signatureDetail ? `<code>${esc(t.signatureDetail)}</code>` : ''}
       </div>` : '';
 
     const errBlock = t.status === 'error' && t.error ? `<div class="error-box">${esc(t.error)}</div>` : '';
+    const warnBlock = t.warning ? `<div class="warning-box">${esc(t.warning)}</div>` : '';
     const verifyBlock = t.verify === 'mismatch'
       ? `<div class="error-box">哈希与期望值不一致，文件${t.finalPath ? '已隔离到：' + esc(t.finalPath) : '未通过校验'}</div>` : '';
 
@@ -500,9 +514,9 @@
     $('#drawerTitle').textContent = st.text + ' · 详情';
     $('#drawerBody').innerHTML = `
       <div class="detail-name">${esc(t.name || '未命名任务')}</div>
-      ${errBlock}${verifyBlock}
+      ${errBlock}${warnBlock}${verifyBlock}
       <div class="detail-progress">
-        <div class="progress"><i style="width:${pct(t).toFixed(2)}%"></i></div>
+        <div class="progress"><i style="width:${t.size ? pct(t).toFixed(2) + '%' : '100%'}"></i></div>
         <div class="task-bottom"><span class="live">${t.status === 'downloading' ? fmtSpeed(t.speed) : st.text}</span>
         <span>${t.size ? fmtSize(t.done) + ' / ' + fmtSize(t.size) : fmtSize(t.done)}</span></div>
       </div>
@@ -636,6 +650,10 @@
   async function saveSettings() {
     try {
       const body = collectSettings();
+      // 保存目录走单独接口：服务端会拒绝在普通设置里偷偷换写入根目录
+      if (state.data && body.saveDir !== state.data.settings.saveDir) {
+        await api('/api/settings/save-dir', { dir: body.saveDir });
+      }
       await api('/api/settings', body);
       state.editSettings = false;
       toast('设置已保存', 'good');
@@ -747,7 +765,7 @@
           const buf = await torrent.arrayBuffer();
           const res = await fetch('/api/torrent?name=' + encodeURIComponent(torrent.name), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/octet-stream' },
+            headers: { 'Content-Type': 'application/octet-stream', 'X-DG-Token': DG_TOKEN },
             body: buf
           });
           const data = await res.json();
