@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -35,13 +36,12 @@ class GuardHook : IXposedHookLoadPackage {
     companion object {
         private const val TAG = "[DownloadGuard-Xposed]"
 
-        /** 回传广播发给模块 relay 的包名与确认广播的 action/权限。 */
-        private const val RELAY_PACKAGE = "com.dlguard.xposed"
+        /** 确认广播的 action 与权限（回传走 RelayProvider，不再用广播）。 */
         const val ACTION_TAKEOVER_CONFIRM = "com.dlguard.action.TAKEOVER_CONFIRM"
         private const val SEND_PERMISSION = "com.dlguard.permission.SEND_CAPTURED_URL"
         private const val CONFIRM_TIMEOUT_MS = 10_000L
 
-        /** RelayReceiver 用它校验「广播确实来自宿主进程」，不可私有。 */
+        /** RelayProvider 用它校验「调用方确实是已知宿主进程」，不可私有。 */
         val TARGET_PACKAGES = setOf(
             "com.android.chrome",
             "com.chrome.beta",
@@ -116,6 +116,17 @@ class GuardHook : IXposedHookLoadPackage {
             val now = SystemClock.elapsedRealtime()
             pendingRemovals.entries.removeIf { now - it.value.registeredAt > CONFIRM_TIMEOUT_MS }
         }
+
+        /**
+         * 把回传数据经模块 RelayProvider 转发给主 App。
+         * 同步调用：provider 在 Binder 线程校验调用方身份（getCallingUid 可靠），返回 ok/error。
+         * 模块未安装 / 被 LSPosed 停用 / authority 不存在时抛 IllegalArgumentException，返回 null。
+         * 放 companion：静态嵌套类 CapturingDownloadListener 也要调用。
+         */
+        fun relay(context: Context, extras: Bundle): Bundle? =
+            runCatching {
+                context.contentResolver.call(RelayProvider.RELAY_URI, RelayProvider.METHOD_RELAY, null, extras)
+            }.onFailure { log("relay 调用失败：${it.message}") }.getOrNull()
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -199,7 +210,7 @@ class GuardHook : IXposedHookLoadPackage {
      * 国产浏览器绝大多数用 WebView 内核，下载开始时会回调 `DownloadListener.onDownloadStart`，
      * 这里把原 listener 包一层，先把 URL/文件名回传给主 App，再原样转发，不改变宿主行为。
      *
-     * 回传走模块 relay（见 [RelayReceiver]）：宿主进程没有 signature 权限，直接发
+     * 回传走模块 relay（见 [RelayProvider]）：宿主进程没有 signature 权限，直接发
      * 给主 App 会被系统丢弃。WebView 路径标记 kind=webview——浏览器内置下载器
      * 无法从 Xposed 层取消，主 App 只把它记进候选列表，不会自动建任务（否则同
      * 一个文件会被下两遍）。
@@ -264,20 +275,17 @@ class GuardHook : IXposedHookLoadPackage {
             if (url.isNullOrBlank()) return
             if (!url.startsWith("http://") && !url.startsWith("https://")) return
             val name = parseFileName(contentDisposition) ?: url.substringAfterLast('/').substringBefore('?')
-            val intent = Intent(RelayReceiver.ACTION_RELAY)
-                .setPackage(RELAY_PACKAGE)
-                .putExtra("url", url)
-                .putExtra("name", name.take(200))
-                .putExtra("source", "Xposed·WebView")
-                .putExtra("referer", referer?.take(4096) ?: "")
-                .putExtra("userAgent", userAgent?.take(512) ?: "")
-                .putExtra("mime", mime?.take(120) ?: "")
-                .putExtra("length", contentLength)
-                .putExtra("kind", "webview")
-                .putExtra("hostPackage", hostPackage)
-                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-            runCatching { context.sendBroadcast(intent) }
-                .onFailure { log("WebView 回传广播失败：${it.message}") }
+            relay(context, Bundle().apply {
+                putString("url", url)
+                putString("name", name.take(200))
+                putString("source", "Xposed·WebView")
+                putString("referer", referer?.take(4096) ?: "")
+                putString("userAgent", userAgent?.take(512) ?: "")
+                putString("mime", mime?.take(120) ?: "")
+                putLong("length", contentLength)
+                putString("kind", "webview")
+                putString("hostPackage", hostPackage)
+            })
         }
 
         private fun parseFileName(contentDisposition: String?): String? {
@@ -297,6 +305,10 @@ class GuardHook : IXposedHookLoadPackage {
      * relay，宿主没有 signature 权限），并在宿主进程里动态注册一个确认接收器：
      * 主 App 开启「自动接收」且成功建任务后回发确认广播，本模块收到才删除系统那份
      * 下载——没确认绝不删，避免文件凭空消失。
+     *
+     * 顺序敏感（3.2.2 修的竞态）：必须先注册确认接收器、先登记这个 id，再发起 relay。
+     * 主 App 处理得快的话回执可能紧跟着 relay 返回就到，反过来的话回执会因为没有
+     * 接收器/登记而落空，系统那份就删不掉。
      */
     private fun hookDownloadManagerEnqueue(lpparam: XC_LoadPackage.LoadPackageParam) {
         runCatching {
@@ -335,27 +347,33 @@ class GuardHook : IXposedHookLoadPackage {
                             val title = runCatching {
                                 XposedHelpers.callMethod(request, "getTitle") as? String
                             }.getOrNull()
-                            val intent = Intent(RelayReceiver.ACTION_RELAY)
-                                .setPackage(RELAY_PACKAGE)
-                                .putExtra("url", url)
-                                .putExtra("name", (title ?: "").take(200))
-                                .putExtra("source", "Xposed·DownloadManager")
-                                .putExtra("referer", (headers["Referer"] ?: headers["referer"] ?: "").take(4096))
-                                .putExtra("userAgent", (headers["User-Agent"] ?: headers["user-agent"] ?: "").take(512))
-                                .putExtra("cookie", (headers["Cookie"] ?: headers["cookie"] ?: "").take(8192))
-                                .putExtra("kind", "dm")
-                                .putExtra("hostPackage", lpparam.packageName)
-                                .putExtra("dlId", id)
-                                .addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
-                            runCatching { context.sendBroadcast(intent) }
-                                .onFailure { log("DownloadManager 回传广播失败：${it.message}") }
 
-                            // 注册确认接收器并登记这个 id：主 App 确认建任务成功后才 remove。
-                            // 宿主进程被杀就收不到确认，系统下载保留——宁可下两遍，不能丢文件。
-                            val manager = param.thisObject as? DownloadManager ?: return
-                            registerConfirmReceiver(context)
-                            pendingRemovals[id] = PendingRemoval(manager, SystemClock.elapsedRealtime())
-                            log("接管系统下载 id=$id url=${url.take(80)}")
+                            // ① 先注册确认接收器并登记 id：主 App 确认建任务成功后才 remove。
+                            //    宿主进程被杀就收不到确认，系统下载保留——宁可下两遍，不能丢文件。
+                            val manager = param.thisObject as? DownloadManager
+                            if (manager != null) {
+                                registerConfirmReceiver(context)
+                                pendingRemovals[id] = PendingRemoval(manager, SystemClock.elapsedRealtime())
+                            }
+
+                            // ② 再发起 relay（同步 call；回执只会比这更晚，登记一定已就绪）
+                            val ok = relay(context, Bundle().apply {
+                                putString("url", url)
+                                putString("name", (title ?: "").take(200))
+                                putString("source", "Xposed·DownloadManager")
+                                putString("referer", (headers["Referer"] ?: headers["referer"] ?: "").take(4096))
+                                putString("userAgent", (headers["User-Agent"] ?: headers["user-agent"] ?: "").take(512))
+                                putString("cookie", (headers["Cookie"] ?: headers["cookie"] ?: "").take(8192))
+                                putString("kind", "dm")
+                                putString("hostPackage", lpparam.packageName)
+                                putLong("dlId", id)
+                            })
+                            if (ok == null) {
+                                log("relay 调用失败（模块未安装或进程异常），保留系统下载 id=$id")
+                                pendingRemovals.remove(id)
+                            } else {
+                                log("接管系统下载 id=$id url=${url.take(80)} relay=${ok.getBoolean("ok")}")
+                            }
                         }
                     }
                 }

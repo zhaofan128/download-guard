@@ -49,6 +49,7 @@ public final class Task {
     public transient volatile long eta = 0;
     public transient volatile boolean pauseRequested = false;
     public transient volatile boolean cancelRequested = false;
+    public transient volatile int lastHttpCode = 0; // 最后一次收到的 HTTP 状态码：失败文案优先按它解释（跨重试稳定，见 DownloadErrors.forCode）
     public transient String stage = "";
     public transient long verifyDone = 0;
     public transient byte[] torrentData = null;   // 上传的 .torrent 只存在内存里，不落盘

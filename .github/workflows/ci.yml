@@ -40,13 +40,18 @@ jobs:
         run: ./gradlew :app:assembleDebug --console=plain
 
       # Xposed 模块默认不参与构建，但它的编译错误 CI 必须能看到：
-      # 回传链路（RelayReceiver + GuardHook）是 3.2.1 重做的，没这一步等于没有回归网。
+      # 回传链路（RelayProvider + GuardHook）是 3.2.2 重做的，没这一步等于没有回归网。
       - name: 编译 Xposed 模块
         run: ./gradlew -PenableXposed :xposed:assembleDebug --console=plain
 
       # 扩展端口发现范围与桌面服务默认端口必须一致（3.2.0 就是这里写错导致默认连不上）
       - name: 端口一致性静态检查（扩展 vs 服务）
         run: python3 scripts/check-bridge-ports.py
+
+      # 主 App 与 Xposed 模块两侧的已知宿主包名列表必须一致（确认回执按包名定向，
+      # 两侧不同步会出现「模块放行了宿主、主 App 却拒绝回执」的静默断裂）
+      - name: 宿主列表一致性静态检查（主 App vs 模块）
+        run: python3 scripts/check-host-packages.py
 
       - name: 执行 JVM 单元测试
         run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace

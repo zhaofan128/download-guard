@@ -14,6 +14,17 @@ public final class DownloadErrors {
 
     private DownloadErrors() {}
 
+    /**
+     * 失败文案：最后一次成功收到的 HTTP 状态码是 4xx/5xx 时优先按它解释，
+     * 其余按异常归一。为什么不直接 humanize(e)：重试/短连接下「最后一击」
+     * 经常是 EOF/Connection reset 这类传输层异常，但根因（403/404/429…）
+     * 已经写在 lastHttpCode 里，按状态码生成的文案跨 JDK、跨网络波动都稳定。
+     */
+    public static String forCode(int lastHttpCode, Throwable e, String url) {
+        if (lastHttpCode >= 400) return forHttp(lastHttpCode, url);
+        return humanize(e);
+    }
+
     public static String forHttp(int code, String url) {
         String host = hostOf(url);
         switch (code) {

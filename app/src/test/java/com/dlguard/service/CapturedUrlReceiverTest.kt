@@ -123,4 +123,17 @@ class CapturedUrlReceiverTest {
         // 窗口过去后重新放行：断点续传/重试场景不能永久拉黑同一个地址
         assertTrue(CapturedUrlReceiver.firstInWindow(url, now = 1_000_000 + 5_001))
     }
+
+    @Test
+    fun `确认回执只发给模块已知宿主`() {
+        // 与 Xposed 模块 GuardHook.TARGET_PACKAGES 同步的列表：命中才放行
+        assertTrue(CapturedUrlReceiver.validHostPackage("com.android.chrome"))
+        assertTrue(CapturedUrlReceiver.validHostPackage(" com.tencent.mtt "))
+        // 不在列表里的一律拒绝：自家包、模块包、任意格式合法的第三方包
+        assertFalse(CapturedUrlReceiver.validHostPackage("com.dlguard"))
+        assertFalse(CapturedUrlReceiver.validHostPackage("com.dlguard.xposed"))
+        assertFalse(CapturedUrlReceiver.validHostPackage("com.evil.attacker"))
+        assertFalse(CapturedUrlReceiver.validHostPackage(""))
+        assertFalse(CapturedUrlReceiver.validHostPackage(null))
+    }
 }

@@ -39,7 +39,7 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.2.1";
+    public static final String VERSION = "3.2.2";
 
     /**
      * 单个分段允许的最大重连次数。
@@ -456,6 +456,7 @@ public final class Engine {
         if ("completed".equals(t.status)) return;
         t.status = "queued";
         t.error = "";
+        t.lastHttpCode = 0;
         t.pauseRequested = false;
         startQueued();
         fire();
@@ -465,6 +466,7 @@ public final class Engine {
         Task t = index.get(id);
         if (t == null) return;
         t.error = "";
+        t.lastHttpCode = 0;
         t.status = "queued";
         persist(true);
         startQueued();
@@ -628,7 +630,9 @@ public final class Engine {
                 saveMeta(t);
             } else {
                 t.status = "error";
-                t.error = DownloadErrors.humanize(e);
+                // 4xx/5xx 状态码优先按它解释：重试/短连接下最后一击常是 EOF 类异常，
+                // 但根因（403/404/429…）在最后一次成功收到的响应码里，跨 JDK 跨网络都稳定
+                t.error = DownloadErrors.forCode(t.lastHttpCode, e, t.url);
                 t.speed = 0;
             }
         } finally {
@@ -804,6 +808,7 @@ public final class Engine {
                 String range = written > 0 && t.rangeSupported ? "bytes=" + written + "-" : null;
                 HttpURLConnection c = open(t, t.url, range);
                 int code = c.getResponseCode();
+                t.lastHttpCode = code;
                 if (code == 206) {
                     // 正常续传，但要核对起点：服务器回 206 却从 0 开始，等于把前半段又写一遍
                     String cr = c.getHeaderField("Content-Range");
@@ -896,6 +901,7 @@ public final class Engine {
             long to = seg.end;
             HttpURLConnection c = open(t, t.url, "bytes=" + from + "-" + to);
             int code = c.getResponseCode();
+            t.lastHttpCode = code;
             if (code == 416) {
                 c.disconnect();
                 if (seg.done >= seg.length()) return;
@@ -1059,6 +1065,7 @@ public final class Engine {
         Probe p = new Probe();
         HttpURLConnection c = open(t, t.url, "bytes=0-0");
         int code = c.getResponseCode();
+        t.lastHttpCode = code;
         if (code == 200 || code == 206) {
             String cr = c.getHeaderField("Content-Range");
             if (cr != null && cr.contains("/")) {

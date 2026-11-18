@@ -132,6 +132,17 @@ public final class SelfTest {
         check("403 提示 Referer", DownloadErrors.forHttp(403, "https://a/b").contains("Referer"), "");
         check("404 说明地址不存在", DownloadErrors.forHttp(404, "https://a/b").contains("404"), "");
         check("429 建议降连接", DownloadErrors.forHttp(429, "https://a/b").contains("连接"), "");
+        // forCode：有明确的 4xx/5xx 就优先按状态码解释，即使最后一击是 EOF 类异常
+        // （重试/短连接下根因在最后一次收到的响应码里，这样文案跨重试稳定）
+        check("forCode 403 覆盖 EOF 异常",
+                DownloadErrors.forCode(403, new IOException("Premature EOF"), "https://a/b")
+                        .equals(DownloadErrors.forHttp(403, "https://a/b")), "");
+        check("forCode 无状态码回退 humanize",
+                DownloadErrors.forCode(0, new IOException("Connection reset"), "https://a/b")
+                        .equals("连接中断，下载不完整，请重试"), "");
+        check("forCode 2xx 不遮蔽传输中断",
+                DownloadErrors.forCode(200, new IOException("Connection reset"), "https://a/b")
+                        .equals("连接中断，下载不完整，请重试"), "");
         // 传输中断必须归一成同一句中文：JDK 17/21/25 对「提前关闭」的底层文案不一样
         check("JDK25 Premature EOF 是中断", DownloadErrors.isEofLike(new IOException("Premature EOF")), "");
         check("JDK17 unexpected end 是中断", DownloadErrors.isEofLike(new IOException("unexpected end of file")), "");

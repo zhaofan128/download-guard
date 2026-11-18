@@ -36,6 +36,10 @@
     <permission
         android:name="com.dlguard.permission.SEND_CAPTURED_URL"
         android:protectionLevel="signature" />
+    <!-- 权限定义者不会自动持有自己的权限：回发 TAKEOVER_CONFIRM 给宿主进程的
+         确认接收器时（receiver 注册时要求发送方持有该权限），本 App 必须显式
+         声明使用它，否则确认广播会被系统丢弃，系统下载永远删不掉（3.2.2 修复） -->
+    <uses-permission android:name="com.dlguard.permission.SEND_CAPTURED_URL" />
 
     <!-- Shizuku 官方要求的包可见性声明（Android 11+）：
          管理器/Sui 包名 + 管理器 provider authority（索取连接、binder 推送链路使用）；
@@ -219,8 +223,10 @@
             </intent-filter>
         </receiver>
 
-        <!-- LSPosed 模块回传下载链接：宿主没有 signature 权限，先发模块 relay
-             （com.dlguard.xposed 的 RelayReceiver，同发布密钥签名），模块再转发到这里。
+        <!-- LSPosed 模块回传下载链接：宿主没有 signature 权限，先调模块 relay
+             （com.dlguard.xposed 的 RelayProvider，同发布密钥签名；3.2.2 起是
+             ContentProvider 而不是广播——call() 在 Binder 线程执行，
+             Binder.getCallingUid() 才是可靠的调用方身份），模块再转发到这里。
              收到后只记录候选；autoIntake 开启且 kind=dm 才自动建任务并回发确认。 -->
         <receiver
             android:name=".service.CapturedUrlReceiver"

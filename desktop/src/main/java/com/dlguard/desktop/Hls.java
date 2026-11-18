@@ -53,7 +53,7 @@ public final class Hls {
         engine.fireNow();
 
         String playlistUrl = t.url;
-        String text = fetchText(engine, playlistUrl);
+        String text = fetchText(engine, t, playlistUrl);
         List<String> lines = splitLines(text);
 
         if (isMaster(lines)) {
@@ -61,7 +61,7 @@ public final class Hls {
             if (best == null) throw new IOException("主播放列表里没有可用清晰度");
             playlistUrl = best.url;
             t.stage = "选定清晰度 " + best.label;
-            text = fetchText(engine, playlistUrl);
+            text = fetchText(engine, t, playlistUrl);
             lines = splitLines(text);
         }
 
@@ -359,9 +359,10 @@ public final class Hls {
 
     // ------------------------------------------------------------------ 下载
 
-    private static String fetchText(Engine engine, String url) throws IOException {
+    private static String fetchText(Engine engine, Task t, String url) throws IOException {
         HttpURLConnection c = engine.open(url, null);
         int code = c.getResponseCode();
+        t.lastHttpCode = code;
         if (code != 200) {
             c.disconnect();
             throw new IOException(DownloadErrors.forHttp(code, url));
@@ -377,9 +378,10 @@ public final class Hls {
         }
     }
 
-    private static byte[] fetchBytes(Engine engine, String url) throws IOException {
+    private static byte[] fetchBytes(Engine engine, Task t, String url) throws IOException {
         HttpURLConnection c = engine.open(url, null);
         int code = c.getResponseCode();
+        t.lastHttpCode = code;
         if (code != 200) {
             c.disconnect();
             throw new IOException(DownloadErrors.forHttp(code, url));
@@ -409,14 +411,14 @@ public final class Hls {
      */
     private static void downloadSeg(Engine engine, Task t, Seg seg, Path out) throws Exception {
         if (t.pauseRequested || t.cancelRequested) throw new Engine.PauseSignal();
-        byte[] data = fetchBytes(engine, seg.url);
+        byte[] data = fetchBytes(engine, t, seg.url);
         if (seg.keyUri != null) {
             byte[] key;
             synchronized (KEY_CACHE) {
                 key = KEY_CACHE.get(seg.keyUri);
             }
             if (key == null) {
-                key = fetchBytes(engine, seg.keyUri);
+                key = fetchBytes(engine, t, seg.keyUri);
                 synchronized (KEY_CACHE) {
                     KEY_CACHE.put(seg.keyUri, key);
                 }

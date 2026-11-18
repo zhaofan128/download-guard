@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
-一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴；**3.2.1** 修掉 3.2.0 的集成问题：扩展端口发现改为 8765–8794（原区间与默认端口对不上，默认启动时配对必失败）、Android 回传链路重做、接管开关默认关、跨 JDK 错误文案归一。
+一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴；**3.2.1** 修掉 3.2.0 的集成问题：扩展端口发现改为 8765–8794（原区间与默认端口对不上，默认启动时配对必失败）、Android 回传链路重做、接管开关默认关、跨 JDK 错误文案归一；**3.2.2** 把 Android 回传的 relay 从广播改成 ContentProvider——广播接收器里拿不到可靠的发送方身份（`Binder.getCallingUid()` 只在 Binder 线程有效），provider 的 `call()` 天生在 Binder 线程执行，宿主校验才算真的成立。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
@@ -32,7 +32,7 @@
 
 这张表会随着能力变化更新，不写「理论上支持」。
 
-桌面版另有 **63 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、Host/Origin 判定、目录白名单与软链逃逸、分段重试预算、Content-Range 起点、真实签名 APK 的 **v2 验签**、篡改/去签名拒绝、证书指纹提取。CI 里提供真实样本，0 跳过。
+桌面版另有 **66 项内置自检**（`--selftest`，无需 JUnit）：JSON 往返、分段覆盖与字节守恒、文件名清洗、Content-Disposition、错误文案、任务序列化、Host/Origin 判定、目录白名单与软链逃逸、分段重试预算、Content-Range 起点、真实签名 APK 的 **v2 验签**、篡改/去签名拒绝、证书指纹提取。CI 里提供真实样本，0 跳过。
 
 再加 **100 项端到端检查**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传不能错位、支持 Range 时杀进程重启必须字节一致、1MB chunked 不能变 1 字节、截断响应必须失败、跨站请求/无令牌/白名单外目录必须被拒、HLS 半截分片与清单变更、`part` 缺失与 `tasks.json` 损坏、20 个 SSE 连接不拖垮 API、真实 APK 验签与篡改隔离。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 真实下载 smoke test。
 
@@ -64,7 +64,7 @@
 
 ### 那这两类设备怎么用
 
-**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.1.jar --lan`，终端会打印一个带随机令牌的地址：
+**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.2.jar --lan`，终端会打印一个带随机令牌的地址：
 
 ```
 http://192.168.1.5:8765/?token=8f3c2a...
@@ -99,7 +99,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 想让手机、平板用同一套界面：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.2.1.jar --lan
+java -jar DownloadGuard-Desktop-3.2.2.jar --lan
 ```
 
 终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
@@ -137,16 +137,16 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 或者让脚本代劳（需要 `gh` 已登录，下载到临时目录后逐项比对）：
 
 ```bash
-./scripts/verify-release.sh v3.2.1
+./scripts/verify-release.sh v3.2.2
 ```
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
 
-桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。JDK 17（CI）与 JDK 20（本地）实测得到同一个 SHA-256，所以 JDK 版本差异不影响结果。你可以自己从 tag 构建一遍再核对：
+桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。**实测 JDK 17 与 JDK 21 构建哈希一致；JDK 25 构建哈希不同**——「Java 11+ 都能跑」不等于「哪个 JDK 构建都一样」，要复现 Release 里的哈希请用 **JDK 17 或 21** 构建。你可以自己从 tag 构建一遍再核对：
 
 ```bash
-git checkout v3.2.1 && cd desktop && ./build.sh
-sha256sum ../dist/DownloadGuard-Desktop-3.2.1.jar
+git checkout v3.2.2 && cd desktop && ./build.sh
+sha256sum ../dist/DownloadGuard-Desktop-3.2.2.jar
 # 与 CHECKSUMS.txt 里那一行对比，一致就说明这份 jar 确实由这个 tag 的源码产出
 ```
 
@@ -367,8 +367,8 @@ cd download-guard
 ./gradlew :app:testDebugUnitTest      # 全部单元测试（185 个用例 / 32 个测试类）
 
 cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
-java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.1.jar --selftest   # 63 项内置自检
-java -jar dist/DownloadGuard-Desktop-3.2.1.jar              # 启动电脑版
+java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.2.jar --selftest   # 66 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.2.2.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -486,7 +486,7 @@ DownloadGuard/
 >
 > **3.1.0** 回到 `x.Y.0`：新增「全部暂停 / 全部继续」（桌面 + Android）与电脑版命令行投递（`--add` / `--status` / `--wait`）。
 >
-> **3.2.0** 新增浏览器接管（见「电脑版 → 浏览器接管」）。**3.2.1** 修三处：扩展端口发现改为 8765–8794（原 37650–37659 与默认端口 8765 对不上，默认启动时配对必报 no_service）+ 手动端口输入 + CI 端口一致性静态检查；Android Xposed 回传链路重做（模块 relay 修签名权限、getContext 改反射 mContext、接管成功后删系统下载、WebView 回传只进候选不自动建任务）；扩展权限收敛（删 activeTab/scripting，<all_urls> 单独说明用途）、接管开关默认关 + 配对后确认 + 站点跳过名单；传输中断文案跨 JDK 归一（JDK 17/21/25 一致），CI 桌面 job 跑 JDK 17+21。
+> **3.2.0** 新增浏览器接管（见「电脑版 → 浏览器接管」）。**3.2.1** 修三处：扩展端口发现改为 8765–8794（原 37650–37659 与默认端口 8765 对不上，默认启动时配对必报 no_service）+ 手动端口输入 + CI 端口一致性静态检查；Android Xposed 回传链路重做（模块 relay 修签名权限、getContext 改反射 mContext、接管成功后删系统下载、WebView 回传只进候选不自动建任务）；扩展权限收敛（删 activeTab/scripting，<all_urls> 单独说明用途）、接管开关默认关 + 配对后确认 + 站点跳过名单；传输中断文案跨 JDK 归一（JDK 17/21/25 一致），CI 桌面 job 跑 JDK 17+21。**3.2.2** 修 Xposed 回传的最后一处硬伤：3.2.1 的 relay 校验把 `Binder.getCallingUid()` 用在 BroadcastReceiver 里，而广播 onReceive 不是 Binder 调用线程、拿到的不是发送方 UID（很可能把真宿主也拒掉）——relay 改成 ContentProvider（`call()` 在 Binder 线程执行，callingUid 可靠）；确认接收器改为先注册登记再发起 relay（修回执竞态）；主 App 显式声明回执权限（定义者不自动持有自己的权限）；确认回执目标按已知宿主列表校验；失败文案优先按最后一次 HTTP 状态码生成（重试/短连接下不再偶发归为「连接中断」）。
 >
 > **3.1.1** 是安全与正确性修订：桌面版本机 API 在所有模式下强制令牌 + 双提交头 + Origin/Host 校验 + 保存目录白名单；未知长度/chunked 下载改单流并强制收尾校验；APK 从「只识别签名方案」改为真实 v2 验签，篡改/去签名直接失败；HLS 分片原子落盘 + 清单指纹；断点 meta 与 tasks 对齐，杜绝全零 completed。3.1.0 的 APK 未发布，3.1.1 是第一个带这些修复的发布版本。
 

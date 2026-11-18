@@ -127,11 +127,34 @@ class CapturedUrlReceiver : BroadcastReceiver() {
             return true
         }
 
-        /** 纯函数：宿主包名必须是 com.dlguard.xposed 模块已知的宿主（防伪造回执目标）。 */
+        /**
+         * 已知宿主列表：与 Xposed 模块 GuardHook.TARGET_PACKAGES 保持同一份
+         * （两处各自维护，新增宿主包名时必须同步改，模块侧不认识的包名 relay 会拒绝）。
+         * 确认广播只发给宿主进程里模块动态注册的接收器——包名错了广播就落到
+         * 不相干的应用头上，所以这里按列表校验而不是只验格式（3.2.2 纵深防御）。
+         */
+        private val KNOWN_HOST_PACKAGES = setOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.tencent.mtt",
+            "com.UCMobile",
+            "com.baidu.searchbox",
+            "com.android.browser",
+            "com.miui.browser",
+            "com.heytap.browser",
+            "com.vivo.browser",
+            "com.quark.browser",
+            "org.mozilla.firefox",
+            "com.microsoft.emmx",
+            "com.tencent.mobileqq",
+            "com.tencent.mm"
+        )
+
+        /** 纯函数：宿主包名必须在模块已知宿主列表里（防伪造回执目标）。 */
         fun validHostPackage(pkg: String?): Boolean {
             val v = pkg?.trim().orEmpty()
-            return v.isNotEmpty() && v != "com.dlguard" && v != "com.dlguard.xposed" &&
-                v.matches(Regex("[a-zA-Z0-9._]+"))
+            return v in KNOWN_HOST_PACKAGES
         }
     }
 

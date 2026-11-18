@@ -21,14 +21,15 @@
             android:value="93" />
 
         <!-- 宿主进程 → 主 App 的转发站：宿主（浏览器/网盘 App）没有 signature 权限，
-             只能把回传数据发给本模块，本模块持有权限后再转发给主 App。 -->
-        <receiver
-            android:name=".RelayReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.dlguard.xposed.action.RELAY" />
-            </intent-filter>
-        </receiver>
+             只能把回传数据发给本模块，本模块持有权限后再转发给主 App。
+             用 ContentProvider 而不是广播：call() 在 Binder 线程执行，
+             Binder.getCallingUid() 是可靠的调用方身份（广播 onReceive 不是，
+             3.2.1 用它校验宿主会把真宿主也拒掉）。不加 permission 保护是刻意的——
+             宿主拿不到 signature 权限，校验在 call() 里手动做。 -->
+        <provider
+            android:name=".RelayProvider"
+            android:authorities="com.dlguard.xposed.relay"
+            android:exported="true" />
     </application>
 
 </manifest>
