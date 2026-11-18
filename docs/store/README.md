@@ -70,7 +70,7 @@ WAKE_LOCK
 | [`review-notes.md`](review-notes.md) | 提交给审核员的备注模板 |
 | [`filing-guide.md`](filing-guide.md) | 软著、APP 备案、各商店提交的逐步指引 |
 | [`filing-sheet.md`](filing-sheet.md) | 备案系统要填的包名、签名 MD5、公钥、SHA-256，已按 3.4.0 安装包生成 |
-| [`../../site/`](../../site/) | 官网与隐私政策静态站（含部署说明） |
+| [`../site-deploy.md`](../site-deploy.md) | 官网与隐私政策静态站的部署说明（源码在 `site/`） |
 | [`store-cut.md`](store-cut.md) | 商店版裁剪了什么、为什么，以及技术验证方法 |
 | `assets/` | 512 图标、圆形图标、1024×500 宣传图 |
 
