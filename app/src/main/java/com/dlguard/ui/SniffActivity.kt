@@ -101,20 +101,26 @@ class SniffActivity : ComponentActivity() {
                         pageUrl = pageUrl,
                         onClose = { finish() },
                         onStartDownload = { url, name, referer, expectedHash ->
-                            // 下载站常校验来源页/登录态：把 WebView 当前的 Referer 与 Cookie
-                            // 一并交给下载引擎，否则直链会直接 403
-                            val cookie = runCatching {
-                                CookieManager.getInstance().getCookie(referer)
-                            }.getOrNull()
                             // 页面链接已被重写成网关地址，下载前必须还原，否则代理会打到网关自己
                             val realUrl = com.dlguard.relay.RelayUrls.extractOriginal(url) ?: url
                             val realReferer = com.dlguard.relay.RelayUrls.extractOriginal(referer) ?: referer
+                            // 下载站常校验来源页/登录态。关键：直链经常和页面不在同一个域
+                            // （pan.example.com → dl.example.net），只取页面域 Cookie 会漏掉
+                            // 直链域那份真正要验的登录态，所以两边都取、按 name 合并。
+                            val pageCookie = runCatching {
+                                CookieManager.getInstance().getCookie(realReferer)
+                            }.getOrNull()
+                            val directCookie = runCatching {
+                                CookieManager.getInstance().getCookie(realUrl)
+                            }.getOrNull()
+                            val cookie = com.dlguard.site.CookieMerge.merge(pageCookie, directCookie)
                             (application as? DownloadGuardApp)?.container?.downloadCenter
                                 ?.start(
                                     realUrl, name,
                                     referer = realReferer,
                                     cookie = cookie,
-                                    expectedHash = expectedHash
+                                    expectedHash = expectedHash,
+                                    pageUrl = realReferer
                                 )
                             finish()
                         }

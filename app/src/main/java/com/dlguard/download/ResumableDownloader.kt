@@ -319,6 +319,11 @@ class ResumableDownloader(
             )
         }
         val ua = policy.userAgent.takeIf { it.isNotBlank() } ?: UA
+        // 站点规则 / 高级选项里的额外请求头。Referer / Cookie / User-Agent 有专门通道，
+        // 这里剔除，避免同一个头被设置两次（OkHttp 会追加而不是覆盖）。
+        val extraHeaders = policy.extraHeaders.filterKeys {
+            !it.equals("Referer", true) && !it.equals("Cookie", true) && !it.equals("User-Agent", true)
+        }
         val limiter = RateLimiter(policy.speedLimit)
         val parsed = runCatching { URI(trimmedUrl) }.getOrNull()
         if (parsed == null || (parsed.scheme != "http" && parsed.scheme != "https")) {
@@ -326,7 +331,7 @@ class ResumableDownloader(
         }
 
         val remote = try {
-            probe(trimmedUrl, ua, referer, cookie)
+            probe(trimmedUrl, ua, referer, cookie, extraHeaders)
         } catch (e: CancellationException) {
             throw e
         } catch (e: HttpStatusException) {
@@ -394,7 +399,8 @@ class ResumableDownloader(
                             fileName = fileName, remote = remote, connections = workerCount,
                             governor = gate, attempt = attempt, ua = ua, limiter = limiter,
                             requireWifi = requireWifi, startedAt = startedAt,
-                            referer = referer, cookie = cookie, onProgress = onProgress
+                            referer = referer, cookie = cookie, extra = extraHeaders,
+                            onProgress = onProgress
                         )
                     } catch (e: RangeUnsupportedException) {
                         // 探测阶段声称支持 Range，真正请求却返回 200：整体降级为单连接
@@ -406,7 +412,8 @@ class ResumableDownloader(
                             fileName = fileName, remote = remote, attempt = attempt,
                             requireWifi = requireWifi, startedAt = startedAt,
                             ua = ua, limiter = limiter,
-                            referer = referer, cookie = cookie, onProgress = onProgress
+                            referer = referer, cookie = cookie, extra = extraHeaders,
+                            onProgress = onProgress
                         )
                     }
                 } else {
@@ -415,7 +422,8 @@ class ResumableDownloader(
                         fileName = fileName, remote = remote, attempt = attempt,
                         requireWifi = requireWifi, startedAt = startedAt,
                         ua = ua, limiter = limiter,
-                        referer = referer, cookie = cookie, onProgress = onProgress
+                        referer = referer, cookie = cookie, extra = extraHeaders,
+                        onProgress = onProgress
                     )
                 }
                 return@withContext outcome.copy(url = trimmedUrl)
@@ -469,7 +477,12 @@ class ResumableDownloader(
     private fun describeNetwork(e: Exception): String = DownloadErrors.network(e)
 
     /** 网页嗅探来的直链常需要携带来源页与登录态，否则 403。 */
-    private fun Request.Builder.sniffHeaders(referer: String?, cookie: String?): Request.Builder = apply {
+    private fun Request.Builder.sniffHeaders(
+        referer: String?,
+        cookie: String?,
+        extra: Map<String, String> = emptyMap()
+    ): Request.Builder = apply {
+        for ((name, value) in extra) header(name, value)
         if (!referer.isNullOrBlank()) header("Referer", referer)
         if (!cookie.isNullOrBlank()) header("Cookie", cookie)
     }
@@ -482,14 +495,15 @@ class ResumableDownloader(
         url: String,
         ua: String,
         referer: String? = null,
-        cookie: String? = null
+        cookie: String? = null,
+        extra: Map<String, String> = emptyMap()
     ): RemoteInfo {
         val rangeRequest = Request.Builder()
             .url(url)
             .header("Range", "bytes=0-0")
             .header("Accept-Encoding", "identity")
             .header("User-Agent", ua)
-            .sniffHeaders(referer, cookie)
+            .sniffHeaders(referer, cookie, extra)
             .get()
             .build()
         try {
@@ -540,7 +554,7 @@ class ResumableDownloader(
             if (!transient && e.code != 405 && e.code != 400 && e.code != 501 && e.code != 403) throw e
         }
         // Range 探测被拒：退回 HEAD（有些服务器只允许 HEAD 拿长度）
-        head(url, ua, referer, cookie)?.let { return it }
+        head(url, ua, referer, cookie, extra)?.let { return it }
         // HEAD 也不行：不当作致命错误，降级为「总长未知 + 不支持分段」的单流下载。
         // 大量下载站/CDN 会拒绝 HEAD 与 Range，但 GET 正常返回 200，硬失败会白白错过。
         return RemoteInfo(
@@ -554,13 +568,19 @@ class ResumableDownloader(
         )
     }
 
-    private fun head(url: String, ua: String, referer: String? = null, cookie: String? = null): RemoteInfo? {
+    private fun head(
+        url: String,
+        ua: String,
+        referer: String? = null,
+        cookie: String? = null,
+        extra: Map<String, String> = emptyMap()
+    ): RemoteInfo? {
         val request = Request.Builder()
             .url(url)
             .head()
             .header("Accept-Encoding", "identity")
             .header("User-Agent", ua)
-            .sniffHeaders(referer, cookie)
+            .sniffHeaders(referer, cookie, extra)
             .build()
         return runCatching {
             client.newCall(request).execute().use { response ->
@@ -598,6 +618,7 @@ class ResumableDownloader(
         startedAt: Long,
         referer: String? = null,
         cookie: String? = null,
+        extra: Map<String, String> = emptyMap(),
         onProgress: (DownloadProgress) -> Unit
     ): DownloadOutcome = coroutineScope {
         val total = remote.totalBytes
@@ -660,6 +681,7 @@ class ResumableDownloader(
                         limiter = limiter,
                         referer = referer,
                         cookie = cookie,
+                        extra = extra,
                         onBytes = { dirty.set(true) }
                     )
                 } catch (_: RetireRequested) {
@@ -803,6 +825,7 @@ class ResumableDownloader(
         limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
+        extra: Map<String, String> = emptyMap(),
         onBytes: (Long) -> Unit
     ) {
         var idleWait = WORKER_IDLE_WAIT_MS
@@ -830,7 +853,7 @@ class ResumableDownloader(
                 try {
                     downloadChunk(
                         chunk, url, part, etag, total, httpClient, retire, syncGate,
-                        ua, limiter, referer, cookie, onBytes
+                        ua, limiter, referer, cookie, extra, onBytes
                     )
                     success = true
                     break
@@ -882,6 +905,7 @@ class ResumableDownloader(
         limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
+        extra: Map<String, String> = emptyMap(),
         onBytes: (Long) -> Unit
     ) {
         val start = chunk.start
@@ -901,7 +925,7 @@ class ResumableDownloader(
                 .header("Range", "bytes=${start + done}-$limit")
                 .header("Accept-Encoding", "identity")
                 .header("User-Agent", ua)
-                .sniffHeaders(referer, cookie)
+                .sniffHeaders(referer, cookie, extra)
                 .get()
             if (!etag.isNullOrBlank()) requestBuilder.header("If-Range", etag)
 
@@ -1005,6 +1029,7 @@ class ResumableDownloader(
         limiter: RateLimiter = RateLimiter(0),
         referer: String? = null,
         cookie: String? = null,
+        extra: Map<String, String> = emptyMap(),
         onProgress: (DownloadProgress) -> Unit
     ): DownloadOutcome {
         var existing = if (part.exists()) part.length() else 0L
@@ -1025,7 +1050,7 @@ class ResumableDownloader(
             .url(remote.downloadUrl(url))
             .header("Accept-Encoding", "identity")
             .header("User-Agent", ua)
-            .sniffHeaders(referer, cookie)
+            .sniffHeaders(referer, cookie, extra)
             .get()
         if (existing > 0L) requestBuilder.header("Range", "bytes=$existing-")
         if (!remote.etag.isNullOrBlank() && existing > 0L) requestBuilder.header("If-Range", remote.etag)
@@ -1423,7 +1448,9 @@ class ResumableDownloader(
         }.getOrNull()
         val candidate = preferred ?: fromHeader ?: fromUrl?.takeIf { it.isNotBlank() }
             ?: "download_${Formatters.timestampForName()}"
-        val name = Formatters.safeFileName(candidate)
+        val templated = FileNameTemplate.apply(policy.fileNameTemplate, candidate, url)
+            .takeIf { it.isNotBlank() } ?: candidate
+        val name = Formatters.safeFileName(templated)
         if (name.contains('.')) return limitName(name)
 
         // 无扩展名：按 Content-Type / URL 线索补齐，否则监听器会直接跳过这个文件

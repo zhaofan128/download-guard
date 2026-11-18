@@ -30,6 +30,14 @@ class AppContainer(private val context: Context) {
 
     val database: AppDatabase by lazy { AppDatabase.get(context) }
     val settings: SettingsStore by lazy { SettingsStore(context) }
+
+    /** 站点规则：按域名保存 Referer / Cookie 来源 / UA / 并发 / 文件名模板。 */
+    val siteRuleStore: com.dlguard.site.SiteRuleStore by lazy {
+        com.dlguard.site.SiteRuleStore(context)
+    }
+    val siteRuleResolver: com.dlguard.site.SiteRuleResolver by lazy {
+        com.dlguard.site.SiteRuleResolver(siteRuleStore)
+    }
     val quarantine: QuarantineManager by lazy { QuarantineManager(context) }
 
     /** 用户显式确认过「没问题」的文件指纹（加壳包、企业定制包等）。 */
@@ -67,7 +75,15 @@ class AppContainer(private val context: Context) {
             policyProvider = { pluginManager.downloadPolicy() },
             // 插件脚本重写：沙箱执行，无网络/文件/反射权限
             urlRewriter = { url -> pluginManager.rewriteUrl(url) },
-            hls = hlsDownloader
+            hls = hlsDownloader,
+            profileResolver = { ctx ->
+                siteRuleResolver.resolve(
+                    url = ctx.url,
+                    pageUrl = ctx.pageUrl,
+                    pageCookie = ctx.pageCookie,
+                    explicit = ctx.explicit
+                )
+            }
         )
     }
 

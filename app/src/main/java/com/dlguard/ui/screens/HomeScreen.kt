@@ -52,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -65,6 +66,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -84,6 +87,7 @@ import com.dlguard.download.DownloadTask
 import com.dlguard.download.ResumableDownloader
 import com.dlguard.download.TaskPhase
 import com.dlguard.shizuku.ShizukuHelper
+import com.dlguard.ui.AdvancedRequest
 import com.dlguard.ui.MainViewModel
 import com.dlguard.ui.SettingViewModel
 import com.dlguard.ui.components.AnimatedCounter
@@ -121,6 +125,7 @@ fun HomeScreen(
     val clipboard by viewModel.clipboardSuggestion.collectAsStateWithLifecycle()
     val pendingName by viewModel.pendingFileName.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val advanced by viewModel.advanced.collectAsStateWithLifecycle()
     val tuneState by viewModel.tuneState.collectAsStateWithLifecycle()
     val resolving by viewModel.resolving.collectAsStateWithLifecycle()
     val plugins by viewModel.plugins.collectAsStateWithLifecycle()
@@ -218,6 +223,9 @@ fun HomeScreen(
                 url = url,
                 onUrlChange = { url = it },
                 onStart = { viewModel.smartDownload(url) },
+                advanced = advanced,
+                onAdvancedChange = viewModel::updateAdvanced,
+                onSaveRule = { viewModel.saveAsSiteRule(url) },
                 resolving = resolving,
                 onUseClipboard = {
                     val manager = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
@@ -676,11 +684,177 @@ private fun RedownloadHint(fileName: String, onDismiss: () -> Unit, onPaste: () 
     }
 }
 
+/**
+ * 首页「高级请求头」折叠区。
+ *
+ * 网盘直链只贴 URL 基本必然 403：服务器要的是「来源页 + 登录态」。
+ * 之前这些参数只能在网页嗅探页里隐式带入，手动粘贴链接的用户完全无解。
+ *
+ * 隐私边界：所有输入只存在内存里，不写 DataStore、不进日志；
+ * 「保存为站点规则」也只保存来源策略，不保存 Cookie 值。
+ */
+@Composable
+private fun AdvancedPanel(
+    advanced: AdvancedRequest,
+    onChange: (AdvancedRequest) -> Unit,
+    onSaveRule: () -> Unit,
+    canSaveRule: Boolean
+) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    var showCookie by rememberSaveable { mutableStateOf(false) }
+    val filled = !advanced.isEmpty
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { open = !open }
+            .padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "高级请求头",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (filled) "已填写" else "403 时再填",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (filled) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text = if (open) "收起" else "展开",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+            modifier = Modifier
+                .size(18.dp)
+                .rotate(if (open) 90f else 0f)
+        )
+    }
+
+    AnimatedVisibility(visible = open) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "只用于本次下载，不会保存、不会写日志。网盘直链缺 Referer / Cookie 时 403 是正常现象。",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+            )
+            AdvancedField(
+                label = "Referer（来源页）",
+                value = advanced.referer,
+                onValueChange = { onChange(advanced.copy(referer = it)) },
+                placeholder = "https://pan.example.com/share/abc"
+            )
+            AdvancedField(
+                label = "Cookie",
+                value = advanced.cookie,
+                onValueChange = { onChange(advanced.copy(cookie = it)) },
+                placeholder = "name=value; name2=value2",
+                visualTransformation = if (showCookie) VisualTransformation.None
+                else PasswordVisualTransformation(),
+                trailing = {
+                    Text(
+                        text = if (showCookie) "隐藏" else "显示",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable { showCookie = !showCookie }
+                            .padding(horizontal = 4.dp)
+                    )
+                }
+            )
+            AdvancedField(
+                label = "User-Agent",
+                value = advanced.userAgent,
+                onValueChange = { onChange(advanced.copy(userAgent = it)) },
+                placeholder = "留空 = 内置移动端 Chrome"
+            )
+            AdvancedField(
+                label = "额外 Header（每行 Key: Value）",
+                value = advanced.headers,
+                onValueChange = { onChange(advanced.copy(headers = it)) },
+                placeholder = "Accept-Language: zh-CN\nX-Requested-With: com.example",
+                singleLine = false,
+                minLines = 3
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GuardButton(
+                    text = "保存为站点规则",
+                    onClick = onSaveRule,
+                    modifier = Modifier.weight(1f),
+                    style = GuardButtonStyle.Glass,
+                    enabled = canSaveRule
+                )
+                GuardButton(
+                    text = "清空",
+                    onClick = { onChange(AdvancedRequest()) },
+                    modifier = Modifier.weight(1f),
+                    style = GuardButtonStyle.Glass,
+                    enabled = filled
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AdvancedField(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    singleLine: Boolean = true,
+    minLines: Int = 1,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier.fillMaxWidth(),
+        label = {
+            Text(label, style = MaterialTheme.typography.labelSmall)
+        },
+        placeholder = {
+            Text(
+                text = placeholder,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+            )
+        },
+        singleLine = singleLine,
+        minLines = minLines,
+        visualTransformation = visualTransformation,
+        trailingIcon = trailing,
+        shape = RoundedCornerShape(14.dp),
+        textStyle = MaterialTheme.typography.bodySmall,
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent,
+            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+            unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f),
+            cursorColor = MaterialTheme.colorScheme.primary
+        )
+    )
+}
+
 @Composable
 private fun DownloadCard(
     url: String,
     onUrlChange: (String) -> Unit,
     onStart: () -> Unit,
+    advanced: AdvancedRequest,
+    onAdvancedChange: (AdvancedRequest) -> Unit,
+    onSaveRule: () -> Unit,
     resolving: Boolean,
     onUseClipboard: () -> Unit,
     tuneState: MainViewModel.TuneState,
@@ -735,7 +909,14 @@ private fun DownloadCard(
                 cursorColor = MaterialTheme.colorScheme.primary
             )
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(4.dp))
+        AdvancedPanel(
+            advanced = advanced,
+            onChange = onAdvancedChange,
+            onSaveRule = onSaveRule,
+            canSaveRule = url.isNotBlank()
+        )
+        Spacer(Modifier.height(8.dp))
         // 多任务模型：随时都能往队列里加任务，暂停/删除在每个任务行上单独操作
         GuardButton(
             text = when {

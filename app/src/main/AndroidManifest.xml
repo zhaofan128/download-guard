@@ -130,6 +130,30 @@
             android:theme="@style/Theme.DownloadGuard"
             android:windowSoftInputMode="adjustResize" />
 
+        <!-- 站点规则管理：按域名保存 Referer / Cookie 来源 / UA / 并发 / 文件名模板 -->
+        <activity
+            android:name=".ui.SiteRulesActivity"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:exported="false"
+            android:theme="@style/Theme.DownloadGuard"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- 分享入口：浏览器 / 网盘 App 分享链接进来。
+             直链直接建任务，分享页交给嗅探页；不申请任何额外权限。 -->
+        <activity
+            android:name=".ui.ShareActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@style/Theme.DownloadGuard"
+            android:taskAffinity="com.dlguard.share">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <!-- 常驻守护前台服务：specialUse + dataSync 双声明 -->
         <service
             android:name=".service.MonitorService"

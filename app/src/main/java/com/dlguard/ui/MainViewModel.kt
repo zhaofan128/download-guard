@@ -43,6 +43,29 @@ data class PermissionUiState(
     val legacyStorage: Boolean = false
 )
 
+/**
+ * 首页「高级请求头」表单。
+ *
+ * 只活在内存里：Cookie 明文不写 DataStore、不进日志，进程退出即清空。
+ * 「保存为站点规则」也只保存 Cookie 的**来源策略**，不保存值本身。
+ */
+data class AdvancedRequest(
+    val referer: String = "",
+    val cookie: String = "",
+    val userAgent: String = "",
+    val headers: String = ""
+) {
+    val isEmpty: Boolean
+        get() = referer.isBlank() && cookie.isBlank() && userAgent.isBlank() && headers.isBlank()
+
+    fun toProfile(): com.dlguard.site.RequestProfile = com.dlguard.site.RequestProfile(
+        referer = referer.trim().takeIf { it.isNotEmpty() },
+        cookie = cookie.trim().takeIf { it.isNotEmpty() },
+        userAgent = userAgent.trim().takeIf { it.isNotEmpty() },
+        headers = com.dlguard.site.SiteRules.parseHeaderLines(headers)
+    )
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val app = application as DownloadGuardApp
@@ -67,6 +90,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val plugins = container.pluginManager.plugins
 
     val capturedLinks = container.capturedLinks
+
+    /** 站点规则列表（设置页显示条数，规则页直接读 store）。 */
+    val siteRules = container.siteRuleStore.rules
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _advanced = MutableStateFlow(AdvancedRequest())
+    val advanced = _advanced.asStateFlow()
+
+    fun updateAdvanced(value: AdvancedRequest) {
+        _advanced.value = value
+    }
+
+    fun clearAdvanced() {
+        _advanced.value = AdvancedRequest()
+    }
+
+    /**
+     * 把当前链接 + 高级参数固化成一条站点规则。
+     *
+     * 只保存「Cookie 来源」不保存 Cookie 值：规则文件要能分享，
+     * 里面夹带登录态就是事故。
+     */
+    fun saveAsSiteRule(url: String) {
+        val trimmed = url.trim()
+        val draft = container.siteRuleStore.draftFor(trimmed)
+        if (draft == null) {
+            _messages.tryEmit("链接无效，无法生成站点规则")
+            return
+        }
+        val adv = _advanced.value
+        val hasCookie = adv.cookie.isNotBlank()
+        val rule = draft.copy(
+            refererMode = if (adv.referer.isNotBlank()) com.dlguard.site.RefererMode.CUSTOM
+            else com.dlguard.site.RefererMode.PAGE,
+            refererValue = adv.referer.trim(),
+            cookieMode = if (hasCookie) com.dlguard.site.CookieMode.DIRECT
+            else com.dlguard.site.CookieMode.MERGE,
+            cookieValue = "",
+            userAgent = adv.userAgent.trim(),
+            headers = com.dlguard.site.SiteRules.parseHeaderLines(adv.headers)
+        )
+        viewModelScope.launch {
+            container.siteRuleStore.upsert(rule)
+            _messages.emit(
+                if (hasCookie) {
+                    "已保存规则「${rule.name}」：Cookie 只记录了「取直链域」策略，值不会落盘"
+                } else {
+                    "已保存规则「${rule.name}」：${rule.hosts.joinToString()} 下次自动套用"
+                }
+            )
+        }
+    }
 
     private val _permissions = MutableStateFlow(PermissionUiState(vendor = PermissionHelper.vendorLabel()))
     val permissions = _permissions.asStateFlow()
@@ -352,7 +427,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val sniffRequest = _sniffRequest.asSharedFlow()
 
     fun startDownload(url: String) {
-        container.downloadCenter.start(url)
+        container.downloadCenter.start(url, profile = _advanced.value.toProfile())
     }
 
     /**
@@ -392,7 +467,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             viewModelScope.launch(Dispatchers.IO) {
                 try {
                     if (looksLikeFileUrl(trimmed)) {
-                        container.downloadCenter.start(trimmed)
+                        container.downloadCenter.start(trimmed, profile = _advanced.value.toProfile())
                         _messages.emit("接力模式：经 ${com.dlguard.relay.RelayState.host} 下载（并发上限 32）")
                     } else {
                         _sniffRequest.tryEmit(trimmed)
@@ -416,14 +491,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             _sniffRequest.tryEmit(trimmed)
                             _messages.emit("没探到文件，改用网页模式加载页面…")
                         } else {
-                            container.downloadCenter.start(trimmed)
+                            container.downloadCenter.start(trimmed, profile = _advanced.value.toProfile())
                         }
                     }
                     probe.isHtml -> {
                         _sniffRequest.tryEmit(trimmed)
                         _messages.emit("检测到网页，正在加载页面抓取真实下载地址…")
                     }
-                    else -> container.downloadCenter.start(trimmed, probe.fileName)
+                    else -> container.downloadCenter.start(
+                        trimmed, probe.fileName, profile = _advanced.value.toProfile()
+                    )
                 }
             } finally {
                 _resolving.value = false

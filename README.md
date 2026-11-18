@@ -7,7 +7,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
-一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴；**3.2.1** 修掉 3.2.0 的集成问题：扩展端口发现改为 8765–8794（原区间与默认端口对不上，默认启动时配对必失败）、Android 回传链路重做、接管开关默认关、跨 JDK 错误文案归一；**3.2.2** 把 Android 回传的 relay 从广播改成 ContentProvider——广播接收器里拿不到可靠的发送方身份（`Binder.getCallingUid()` 只在 Binder 线程有效），provider 的 `call()` 天生在 Binder 线程执行，宿主校验才算真的成立；**3.2.3** 把 relay 移到后台线程（Provider 冷启动时在宿主 UI 线程同步调用会卡顿甚至 ANR），共享 UID 宿主改为「任一包命中即放行」。
+一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴；**3.2.1** 修掉 3.2.0 的集成问题：扩展端口发现改为 8765–8794（原区间与默认端口对不上，默认启动时配对必失败）、Android 回传链路重做、接管开关默认关、跨 JDK 错误文案归一；**3.2.2** 把 Android 回传的 relay 从广播改成 ContentProvider——广播接收器里拿不到可靠的发送方身份（`Binder.getCallingUid()` 只在 Binder 线程有效），provider 的 `call()` 天生在 Binder 线程执行，宿主校验才算真的成立；**3.2.3** 把 relay 移到后台线程（Provider 冷启动时在宿主 UI 线程同步调用会卡顿甚至 ANR），共享 UID 宿主改为「任一包命中即放行」；**3.3.0** 把「不同网盘的请求头差异」变成可导入导出的站点规则（Referer / Cookie 来源 / UA / 并发 / 文件名模板），嗅探页同时合并页面域与直链域 Cookie，并加了分享入口与首页高级请求头。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
 
@@ -15,7 +15,7 @@
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
 - 电脑版：纯 Java 11 实现，**零第三方依赖**，一个 106 KB 的 jar；界面用系统浏览器渲染，手机/平板连同一 WiFi 也能打开（`--lan`，带随机令牌）
-- **186 个 JVM 单元测试、32 个测试类，CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
+- **212 个 JVM 单元测试、33 个测试类，CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
 - 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、磁力链接解析、BT 状态映射与限速展示、真实 APK 的 v2 签名摘要重算
 
 ## 它做不到什么（先看这里，比看功能列表省时间）
@@ -36,7 +36,7 @@
 
 再加 **100 项端到端检查**（`desktop/test/e2e.py`，起真 HTTP 服务器、真下载、真杀进程）：服务器忽略 Range 时暂停再续传不能错位、支持 Range 时杀进程重启必须字节一致、1MB chunked 不能变 1 字节、截断响应必须失败、跨站请求/无令牌/白名单外目录必须被拒、HLS 半截分片与清单变更、`part` 缺失与 `tasks.json` 损坏、20 个 SSE 连接不拖垮 API、真实 APK 验签与篡改隔离。CI 里独立一个 job 跑编译 + 自检 + 端到端 + 真实下载 smoke test。
 
-关于测试的实话：186 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
+关于测试的实话：212 个用例全是 JVM 单测（含一条「下载临时文件 → v2 验签」的字节级集成用例），**没有 instrumented test，也没有 Compose UI 自动化**。Service、无障碍、Xposed、Shizuku 这些链路靠真机手动验证，CI 覆盖不到。仓库没有 issue/PR 历史，所有「实测」「用户反馈」类结论都应视为未独立复核。
 
 ## 哪些系统能用
 
@@ -64,7 +64,7 @@
 
 ### 那这两类设备怎么用
 
-**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.2.3.jar --lan`，终端会打印一个带随机令牌的地址：
+**让电脑干活，手机当遥控器。** 电脑上执行 `java -jar DownloadGuard-Desktop-3.3.0.jar --lan`，终端会打印一个带随机令牌的地址：
 
 ```
 http://192.168.1.5:8765/?token=8f3c2a...
@@ -99,7 +99,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 想让手机、平板用同一套界面：
 
 ```bash
-java -jar DownloadGuard-Desktop-3.2.3.jar --lan
+java -jar DownloadGuard-Desktop-3.3.0.jar --lan
 ```
 
 终端会打印形如 `http://192.168.1.5:8765/?token=…` 的地址，同一 WiFi 下用手机浏览器打开即可。令牌每次启动随机生成，没有令牌的请求一律 403。
@@ -137,7 +137,7 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 或者让脚本代劳（需要 `gh` 已登录，下载到临时目录后逐项比对）：
 
 ```bash
-./scripts/verify-release.sh v3.2.3
+./scripts/verify-release.sh v3.3.0
 ```
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
@@ -145,8 +145,8 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。**实测 JDK 17 与 JDK 21 构建哈希一致；JDK 25 构建哈希不同**——「Java 11+ 都能跑」不等于「哪个 JDK 构建都一样」，要复现 Release 里的哈希请用 **JDK 17 或 21** 构建。你可以自己从 tag 构建一遍再核对：
 
 ```bash
-git checkout v3.2.3 && cd desktop && ./build.sh
-sha256sum ../dist/DownloadGuard-Desktop-3.2.3.jar
+git checkout v3.3.0 && cd desktop && ./build.sh
+sha256sum ../dist/DownloadGuard-Desktop-3.3.0.jar
 # 与 CHECKSUMS.txt 里那一行对比，一致就说明这份 jar 确实由这个 tag 的源码产出
 ```
 
@@ -294,9 +294,27 @@ sha256sum ../dist/DownloadGuard-Desktop-3.2.3.jar
 - **识别流媒体**：`.m3u8` 直接可下（点播 + 标准 AES-128，见上一节）；`.mpd` / `.ts` / `.m4s` 会明确标出来并说明为什么不能单独下。内置下载器不做 DRM 解密（工程量之外，绕 DRM 本身有法律风险），但至少不会让用户白等一个几 KB 的播放列表
 - **提取页面里的官方哈希**：从可见文本里找 `SHA256:` / `MD5:` 标签值与裸的 64/32 位十六进制串，作为候选列出来。**默认不选用** —— 页面内容本身不可信，自动采纳等于让攻击者同时控制文件和校验基准
 
-抓到链接后，连同当前页的 `Referer` 和 `CookieManager` 里的 Cookie 一起交给下载器——这是防盗链站点能正常下载的前提。`blob:` 开头的地址抓不到，这是 WebView 的边界，会明确提示而不是假装在下载。
+抓到链接后，连同当前页的 `Referer` 和 `CookieManager` 里的 Cookie 一起交给下载器——这是防盗链站点能正常下载的前提。3.3.0 起 Cookie 不再只取页面域：直链域的那份也会取，按 name 合并（同名以直链域为准），跨子域/跨域的网盘直链成功率明显不同。`blob:` 开头的地址抓不到，这是 WebView 的边界，会明确提示而不是假装在下载。
 
-### 四、安装包安装（标准路径）
+### 四、站点规则与登录态
+
+网盘直链的成败八成在请求头：Referer 不对、Cookie 缺域，服务器就给 403。这一版把「每个站点该带什么」抽成可配置的规则，而不是继续加连接数。
+
+**嗅探页**：同时读页面域与直链域的 Cookie，按 name 合并，同名以直链域为准。页面在 `pan.example.com`、直链在 `dl.example.net` 时不会再漏登录态；从 DevTools 整行粘贴带进来的 `Path` / `Domain` / `Expires` 等属性会被剔除。
+
+**首页高级区**：手动粘贴直链时可填 Referer / Cookie / User-Agent / 额外 Header，默认折叠，403 时再展开。输入只在内存里，不落盘、不进日志；Cookie 输入框默认隐藏。
+
+**站点规则**（设置 → 站点规则）：
+
+- 按域名匹配：`example.com` 精确、`*.example.com` 含自身与所有子域、`*` 全部；优先级数值大者胜，同优先级时更具体的域名胜出
+- 每个域名可配：Referer 来源（页面 / 直链 / 自定义 / 不发）、Cookie 来源（页面+直链合并 / 仅页面 / 仅直链 / 自定义 / 不发）、UA、额外 Header、初始并发（0 = 跟随全局）、文件名模板（`{name}` `{ext}` `{host}` `{date}` `{rule}`）、旁挂校验、完成后打开
+- 导入 / 导出 JSON，单条可「测试」——只做匹配与请求头计算，不发任何网络请求，Cookie 只显示 `name=***`
+- **纯声明式**：不含代码、不能读写文件；导出时自动清空自定义 Cookie 的值
+- 请求头白名单：`Host` / `Range` / `Content-Length` / `Accept-Encoding` 等引擎保留头一律拒绝，值里带换行直接丢弃
+
+**分享入口**：浏览器 / 网盘 App 分享链接到本 App——有明确文件后缀（或 `/download/`、`?filename=`、`getfile`）的直接建任务，其余打开嗅探页。直链没带登录态时若 403，任务卡片上的「网页模式」可以登录后重下。
+
+### 五、安装包安装（标准路径）
 
 点校验完成的 APK，走 `FileProvider` + `ACTION_VIEW` 交给系统安装器，这是 Android 的标准做法，**不需要 root、不需要 Shizuku**。
 
@@ -304,7 +322,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.2.3.jar
 - 逐包 `grantUriPermission`，解决部分 ROM 安装器读不到 `content://` 导致的「解析包错误」
 - 如果 ROM 的安装前检测把安装器拦死（报「安装包已损坏」），对话框里提供一个**可选的** Shizuku 直装入口，仅当设备上真的有 Shizuku 时出现
 
-### 五、插件与浏览器扩展
+### 六、插件与浏览器扩展
 
 - **15 个官方内置插件**，全部真实改变下载行为，不是空壳开关：
   「浏览器下载桥」「直链嗅探」「智能并发测速」「网盘直链加速」
@@ -320,7 +338,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.2.3.jar
 - 局域网桥：手机开 `:8787`，24 位 token 鉴权，64KB 请求体上限，供电脑端把链接推给手机下载
 - 浏览器扩展（MV3）打包进 assets，可一键导出 zip 到公共下载目录并深链唤起浏览器扩展管理页
 
-### 六、可选增强
+### 七、可选增强
 
 | 能力 | 依赖 | 不装的后果 |
 | --- | --- | --- |
@@ -364,11 +382,11 @@ git clone https://github.com/zhaofan128/download-guard.git
 cd download-guard
 ./gradlew :app:assembleDebug          # 调试包
 ./gradlew :app:assembleRelease        # 正式包（需要下面的签名配置）
-./gradlew :app:testDebugUnitTest      # 全部单元测试（186 个用例 / 32 个测试类）
+./gradlew :app:testDebugUnitTest      # 全部单元测试（212 个用例 / 33 个测试类）
 
 cd desktop && ./build.sh             # 电脑版：javac + jar，不经过 Gradle
-java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.2.3.jar --selftest   # 66 项内置自检
-java -jar dist/DownloadGuard-Desktop-3.2.3.jar              # 启动电脑版
+java -Ddg.apk=desktop/test/fixtures/signed.apk -jar dist/DownloadGuard-Desktop-3.3.0.jar --selftest   # 66 项内置自检
+java -jar dist/DownloadGuard-Desktop-3.3.0.jar              # 启动电脑版
 ```
 
 环境：JDK 17+、Android SDK 34、Gradle 8.6、AGP 8.2.2、Kotlin 1.9.22。
@@ -402,7 +420,7 @@ DownloadGuard/
 │   ├── shizuku/     Shizuku 特权通道（可选）
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
-├── app/src/test/    186 个 JVM 单元测试（32 个测试类）
+├── app/src/test/    212 个 JVM 单元测试（33 个测试类）
 ├── desktop/         电脑版：纯 Java 11，零依赖，自带 HTTP 服务与响应式 Web UI
 │   ├── src/main/java/com/dlguard/desktop/
 │   │   ├── Engine.java      分段下载、断点续传、队列、全局限速
@@ -433,7 +451,7 @@ DownloadGuard/
 | 链接嗅探 | WebView JS + 无障碍 | 无（直接粘贴链接） | 不适用 |
 | API / 任务模型 | Room + Kotlin 协程 | JSON 文件 + 线程 | 否 |
 
-后果要说清楚：**同一个 bug 可能在两端各修一次；Android 的 186 个单测覆盖不到桌面版**。桌面版靠 `--selftest`（66 项）和 `desktop/test/e2e.py`（100 项检查）兜底，CI 会真实起服务、真下载、真杀进程。短期不强行抽公共 `core/`：两端 IO 模型、生命周期、错误文案都不同，为了「共享」先重写一遍风险更高；真要收敛，按模块迁移并先建 conformance 测试集，而不是一次性重写。
+后果要说清楚：**同一个 bug 可能在两端各修一次；Android 的 212 个单测覆盖不到桌面版**。桌面版靠 `--selftest`（66 项）和 `desktop/test/e2e.py`（100 项检查）兜底，CI 会真实起服务、真下载、真杀进程。短期不强行抽公共 `core/`：两端 IO 模型、生命周期、错误文案都不同，为了「共享」先重写一遍风险更高；真要收敛，按模块迁移并先建 conformance 测试集，而不是一次性重写。
 
 ---
 
@@ -452,6 +470,8 @@ DownloadGuard/
 - **双栈竞速不是 RFC 8305**：OkHttp 不暴露 socket 层竞速，这里做的是「解析后并发探测、按 RTT 排序」，效果等价于首包走最快路径，但不是 250ms 错峰并发 connect 的原版算法
 - **跨应用抓取有硬边界**：很多 WebView 不把链接暴露给无障碍节点，只能读到可见文本；且必须先由用户开启无障碍与「跨应用抓取」，默认不工作
 - **脚本插件只做字符串变换**：不能发请求、不能读文件，所以「需要多步接口才能解析出真实地址」的站点仍然做不了
+- **站点规则的自定义 Cookie 未加密**：存在应用私有 DataStore（未 root 读不到），但不是 Keystore 加密；加密存储 + 生物识别排在 3.4.0 的 Cookie 保险箱
+- **站点规则不是签名插件**：没有 manifest 签名、没有按域名授权的权限模型，也没有审计日志。它是 App 内建的声明式配置，不是第三方插件；插件平台 v2 会补签名与权限项
 - **电脑版默认只认本机地址**：Host 必须是 `127.0.0.1` / `localhost` / 本机网卡地址（`--lan` 时）。用 Nginx 反代或自定义域名访问会得到 403，需要显式 `--allow-host your.domain`——这是为了挡 DNS 重绑定，不是配置出错
 
 ---

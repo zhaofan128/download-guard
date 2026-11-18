@@ -40,6 +40,12 @@ data class DownloadTask(
     val referer: String? = null,
     /** 登录态 Cookie（从 WebView 的 CookieManager 取）。 */
     val cookie: String? = null,
+    /** 嗅探 / 分享来源页，站点规则据此决定「页面域 Cookie」取哪个域。 */
+    val pageUrl: String? = null,
+    /** 用户手动填写的高级请求参数（优先级高于站点规则）。 */
+    val profile: com.dlguard.site.RequestProfile = com.dlguard.site.RequestProfile(),
+    /** 命中的站点规则名（仅用于界面展示，不参与下载）。 */
+    val ruleName: String? = null,
     /** 用户选定的官方校验基准，格式 `SHA-256:abc…`；空 = 不比对。 */
     val expectedHash: String? = null,
     val phase: TaskPhase = TaskPhase.QUEUED,
@@ -93,7 +99,13 @@ class DownloadCenter(
      */
     private val urlRewriter: (String) -> String? = { null },
     /** HLS（m3u8）点播下载器：与普通下载共用目录解析、并发闸门与收尾校验。 */
-    private val hls: com.dlguard.download.hls.HlsDownloader
+    private val hls: com.dlguard.download.hls.HlsDownloader,
+    /**
+     * 站点规则解析入口。用函数注入而不是直接依赖 SiteRuleResolver，
+     * 保持下载层与配置层解耦，也方便测试时替换成固定 profile。
+     */
+    private val profileResolver: suspend (com.dlguard.site.RequestContext) -> com.dlguard.site.RequestProfile =
+        { com.dlguard.site.RequestProfile() }
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -159,8 +171,10 @@ class DownloadCenter(
         preferredName: String? = null,
         referer: String? = null,
         cookie: String? = null,
-        expectedHash: String? = null
-    ) = addTask(url, preferredName, referer, cookie, expectedHash)
+        expectedHash: String? = null,
+        pageUrl: String? = null,
+        profile: com.dlguard.site.RequestProfile = com.dlguard.site.RequestProfile()
+    ) = addTask(url, preferredName, referer, cookie, expectedHash, pageUrl, profile)
 
     /** 加一个下载任务。并行槽位有空就立刻开跑，没有就排队（顺序 = 加入顺序）。 */
     fun addTask(
@@ -168,7 +182,9 @@ class DownloadCenter(
         preferredName: String? = null,
         referer: String? = null,
         cookie: String? = null,
-        expectedHash: String? = null
+        expectedHash: String? = null,
+        pageUrl: String? = null,
+        profile: com.dlguard.site.RequestProfile = com.dlguard.site.RequestProfile()
     ): Boolean {
         val trimmed = url.trim()
         if (trimmed.isEmpty()) {
@@ -186,6 +202,8 @@ class DownloadCenter(
             preferredName = preferredName,
             referer = referer,
             cookie = cookie,
+            pageUrl = pageUrl,
+            profile = profile,
             expectedHash = expectedHash,
             fileName = preferredName ?: guessName(trimmed)
         )
@@ -227,7 +245,7 @@ class DownloadCenter(
         var url = task.url
         try {
             val settings = runCatching { settingsStore.settings.first() }.getOrNull()
-            val policy = runCatching { policyProvider() }.getOrDefault(DownloadPolicy())
+            val basePolicy = runCatching { policyProvider() }.getOrDefault(DownloadPolicy())
 
             // 插件脚本重写（沙箱执行，只做字符串变换）：必须在探测/分段之前完成，
             // 否则所有 Range 请求都会打到旧地址上。
@@ -245,6 +263,33 @@ class DownloadCenter(
                 _events.tryEmit("已按插件脚本重写下载地址：${HostCircuitBreaker.hostOf(rewritten) ?: "未知站点"}")
             }
 
+            // 站点规则解析放在 URL 重写之后：规则要匹配最终的下载地址，而不是插件改写前的地址。
+            // 解析失败一律降级为「只用用户显式填的参数」，规则配错不能挡下载。
+            val resolved = runCatching {
+                profileResolver(
+                    com.dlguard.site.RequestContext(
+                        url = url,
+                        pageUrl = task.pageUrl ?: task.referer,
+                        pageCookie = task.cookie,
+                        explicit = task.profile
+                    )
+                )
+            }.getOrDefault(task.profile)
+
+            // 规则里的并发数 / 文件名模板 / 旁挂校验 / 完成后打开，逐项覆盖全局策略
+            val policy = basePolicy.copy(
+                userAgent = resolved.userAgent ?: basePolicy.userAgent,
+                extraHeaders = resolved.headers,
+                fileNameTemplate = resolved.fileNameTemplate,
+                sidecarHash = resolved.sidecarHash ?: basePolicy.sidecarHash,
+                autoOpen = resolved.openWhenDone ?: basePolicy.autoOpen
+            )
+            val reqReferer = resolved.referer
+            val reqCookie = resolved.cookie
+            if (resolved.ruleName != null) {
+                updateTask(id) { it.copy(ruleName = resolved.ruleName) }
+            }
+
             val host = HostCircuitBreaker.hostOf(url)
             val breakerOn = policy.globalBreaker && host != null
 
@@ -256,7 +301,9 @@ class DownloadCenter(
             // 32 条已经能把 2.4G/5G 热点跑满，再高是纯内耗。
             val ceiling = if (com.dlguard.relay.RelayState.active) RELAY_MAX_CONNECTIONS
             else deviceMax
-            val initial = (settings?.downloadThreads ?: 16).coerceIn(1, ceiling)
+            val preferredThreads = resolved.concurrency.takeIf { it > 0 }
+                ?: (settings?.downloadThreads ?: 16)
+            val initial = preferredThreads.coerceIn(1, ceiling)
                 .coerceAtMost(cap)
             val gate = ResumableDownloader.ConnectionGovernor(initial)
             rt.governor = gate
@@ -265,7 +312,7 @@ class DownloadCenter(
             rt.peakSpeed = 0L
             rt.lowSince = 0L
             rt.autoAdjusted = false
-            if (breakerOn && cap < (settings?.downloadThreads ?: 16)) {
+            if (breakerOn && cap < preferredThreads) {
                 rt.capLimited = true
                 updateTask(id) {
                     it.copy(
@@ -346,8 +393,8 @@ class DownloadCenter(
                     url = url,
                     preferredName = task.preferredName,
                     requireWifi = settings?.wifiOnlyDownload ?: false,
-                    referer = task.referer,
-                    cookie = task.cookie,
+                    referer = reqReferer,
+                    cookie = reqCookie,
                     onProgress = progressSink
                 )
             } else {
@@ -356,8 +403,8 @@ class DownloadCenter(
                     preferredName = task.preferredName,
                     requireWifi = settings?.wifiOnlyDownload ?: false,
                     connections = initial,
-                    referer = task.referer,
-                    cookie = task.cookie,
+                    referer = reqReferer,
+                    cookie = reqCookie,
                     governor = gate,
                     policy = policy,
                     onProgress = progressSink
@@ -401,8 +448,8 @@ class DownloadCenter(
                         url = url,
                         preferredName = task.preferredName,
                         requireWifi = settings?.wifiOnlyDownload ?: false,
-                        referer = task.referer,
-                        cookie = task.cookie,
+                        referer = reqReferer,
+                        cookie = reqCookie,
                         onProgress = progressSink
                     )
                 } else {
@@ -411,8 +458,8 @@ class DownloadCenter(
                         preferredName = task.preferredName,
                         requireWifi = settings?.wifiOnlyDownload ?: false,
                         connections = next,
-                        referer = task.referer,
-                        cookie = task.cookie,
+                        referer = reqReferer,
+                        cookie = reqCookie,
                         governor = gate,
                         policy = policy,
                         onProgress = progressSink

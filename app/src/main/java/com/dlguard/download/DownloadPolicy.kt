@@ -27,7 +27,14 @@ data class DownloadPolicy(
     /** 全局主机熔断：同站点所有任务共享 403/429 降级状态。 */
     val globalBreaker: Boolean = true,
     /** 下载前自动探测旁挂的 .sha256/.md5 校验文件。 */
-    val sidecarHash: Boolean = true
+    val sidecarHash: Boolean = true,
+    /**
+     * 站点规则带来的额外请求头（已过滤 Referer/Cookie/User-Agent 与引擎保留头）。
+     * 只影响网络请求，不参与任何持久化。
+     */
+    val extraHeaders: Map<String, String> = emptyMap(),
+    /** 文件名模板；空串 = 保留原始文件名。 */
+    val fileNameTemplate: String = ""
 )
 
 /**

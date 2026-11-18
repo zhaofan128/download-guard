@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -63,6 +64,7 @@ import com.dlguard.service.DownloadDirs
 import com.dlguard.service.NotificationHelper
 import com.dlguard.shizuku.ShizukuHelper
 import com.dlguard.ui.MainViewModel
+import com.dlguard.ui.SiteRulesActivity
 import com.dlguard.ui.SettingViewModel
 import com.dlguard.ui.components.GlassCard
 import com.dlguard.ui.components.GuardButton
@@ -95,6 +97,7 @@ fun SettingScreen(
     val quarantineFiles by viewModel.quarantineFiles.collectAsStateWithLifecycle()
     val quarantineBytes by viewModel.quarantineBytes.collectAsStateWithLifecycle()
     val guard by viewModel.guard.collectAsStateWithLifecycle()
+    val siteRules by viewModel.siteRules.collectAsStateWithLifecycle()
 
     var showAddDir by rememberSaveable { mutableStateOf(false) }
     var showClearQuarantine by rememberSaveable { mutableStateOf(false) }
@@ -241,6 +244,23 @@ fun SettingScreen(
                     checked = settings.dynamicColor,
                     hapticEnabled = settings.haptics,
                     onCheckedChange = settingViewModel::setDynamicColor
+                )
+            }
+        }
+
+        item {
+            Section("站点规则") {
+                SettingAction(
+                    title = "按域名管理下载规则",
+                    subtitle = if (siteRules.isEmpty()) {
+                        "网盘直链的 Referer / Cookie 来源 / UA / 并发 / 文件名模板，可导入导出、可测试"
+                    } else {
+                        "${siteRules.size} 条规则 · 命中域名自动套用，不必每次手填请求头"
+                    },
+                    icon = Icons.Filled.List,
+                    onClick = {
+                        context.startActivity(Intent(context, SiteRulesActivity::class.java))
+                    }
                 )
             }
         }
