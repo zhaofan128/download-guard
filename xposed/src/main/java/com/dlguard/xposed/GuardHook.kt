@@ -19,6 +19,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.zip.CRC32
 import java.util.zip.ZipFile
 
@@ -127,6 +128,28 @@ class GuardHook : IXposedHookLoadPackage {
             runCatching {
                 context.contentResolver.call(RelayProvider.RELAY_URI, RelayProvider.METHOD_RELAY, null, extras)
             }.onFailure { log("relay 调用失败：${it.message}") }.getOrNull()
+
+        /**
+         * relay 专用后台线程池：Provider 冷启动需要跨进程拉起模块进程（可能几百毫秒到秒级），
+         * hook 回调在宿主 UI 线程里，同步 call 会让浏览器点下载时卡顿甚至 ANR（3.2.3 修复）。
+         * 下载回传不要求低延迟，异步做、失败只记日志。
+         */
+        private val relayExecutor = Executors.newCachedThreadPool { r ->
+            Thread(r, "DG-Relay").apply { isDaemon = true }
+        }
+
+        /** 后台执行 relay；[onResult] 在该线程回调（用于失败回滚/日志）。 */
+        fun relayAsync(context: Context, extras: Bundle, onResult: ((Bundle?) -> Unit)? = null) {
+            runCatching {
+                relayExecutor.execute {
+                    val r = relay(context, extras)
+                    if (r == null) log("relay 未送达（模块未安装/进程异常）")
+                    else if (!r.getBoolean("ok")) log("relay 被拒绝：${r.getString("error")}")
+                    runCatching { onResult?.invoke(r) }
+                        .onFailure { log("relay 回调异常：${it.message}") }
+                }
+            }.onFailure { log("relay 线程提交失败：${it.message}") }
+        }
     }
 
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -275,7 +298,8 @@ class GuardHook : IXposedHookLoadPackage {
             if (url.isNullOrBlank()) return
             if (!url.startsWith("http://") && !url.startsWith("https://")) return
             val name = parseFileName(contentDisposition) ?: url.substringAfterLast('/').substringBefore('?')
-            relay(context, Bundle().apply {
+            // 回传异步做：宿主 listener 在 UI 线程被调用，不能在这里等跨进程 relay（冷启动可能卡到 ANR）
+            relayAsync(context, Bundle().apply {
                 putString("url", url)
                 putString("name", name.take(200))
                 putString("source", "Xposed·WebView")
@@ -356,8 +380,10 @@ class GuardHook : IXposedHookLoadPackage {
                                 pendingRemovals[id] = PendingRemoval(manager, SystemClock.elapsedRealtime())
                             }
 
-                            // ② 再发起 relay（同步 call；回执只会比这更晚，登记一定已就绪）
-                            val ok = relay(context, Bundle().apply {
+                            // ② 再后台发起 relay：enqueue 的 after hook 在宿主 UI 线程，
+                            //    同步 call 遇到 Provider 冷启动会卡顿甚至 ANR（3.2.3 修复）。
+                            //    顺序仍保证「登记在前、relay 在后」，回执不会落空。
+                            relayAsync(context, Bundle().apply {
                                 putString("url", url)
                                 putString("name", (title ?: "").take(200))
                                 putString("source", "Xposed·DownloadManager")
@@ -367,12 +393,14 @@ class GuardHook : IXposedHookLoadPackage {
                                 putString("kind", "dm")
                                 putString("hostPackage", lpparam.packageName)
                                 putLong("dlId", id)
-                            })
-                            if (ok == null) {
-                                log("relay 调用失败（模块未安装或进程异常），保留系统下载 id=$id")
-                                pendingRemovals.remove(id)
-                            } else {
-                                log("接管系统下载 id=$id url=${url.take(80)} relay=${ok.getBoolean("ok")}")
+                            }) { result ->
+                                if (result == null || !result.getBoolean("ok")) {
+                                    // relay 没送达：模块没装/被拒/进程异常，系统下载必须保留
+                                    log("relay 未送达（模块未安装或被拒绝），保留系统下载 id=$id")
+                                    pendingRemovals.remove(id)
+                                } else {
+                                    log("接管系统下载 id=$id url=${url.take(80)} relay=ok")
+                                }
                             }
                         }
                     }

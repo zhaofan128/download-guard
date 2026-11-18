@@ -39,7 +39,7 @@ public final class Engine {
         void onChanged();
     }
 
-    public static final String VERSION = "3.2.2";
+    public static final String VERSION = "3.2.3";
 
     /**
      * 单个分段允许的最大重连次数。

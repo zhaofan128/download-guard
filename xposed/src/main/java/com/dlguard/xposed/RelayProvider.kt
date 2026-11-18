@@ -39,10 +39,13 @@ class RelayProvider : ContentProvider() {
             return Bundle().apply { putBoolean("ok", false); putString("error", "empty_url") }
         }
 
-        // call() 在 Binder 线程执行，getCallingUid() 是可靠的真实调用方
-        val caller = packageNameOfUid(Binder.getCallingUid())
-        if (caller !in GuardHook.TARGET_PACKAGES) {
-            log("拒绝非宿主转发：caller=$caller")
+        // call() 在 Binder 线程执行，getCallingUid() 是可靠的真实调用方。
+        // 共享 UID（如系统预装同一 uid 的多个浏览器）时 getPackagesForUid 返回多个包，
+        // 只要**任一**包在宿主名单里就放行——只看第一个包会误拒合法宿主
+        val callerPkgs = packageNamesOfUid(Binder.getCallingUid())
+        val caller = callerPkgs.firstOrNull { it in GuardHook.TARGET_PACKAGES }
+        if (caller == null) {
+            log("拒绝非宿主转发：caller=${callerPkgs.joinToString().ifEmpty { "null" }}")
             return Bundle().apply { putBoolean("ok", false); putString("error", "not_target") }
         }
 
@@ -83,10 +86,10 @@ class RelayProvider : ContentProvider() {
                         selectionArgs: Array<out String>?): Int = 0
     override fun getType(uri: Uri): String? = null
 
-    private fun packageNameOfUid(uid: Int): String? {
-        if (uid <= 0) return null
-        val pm = context?.packageManager ?: return null
-        return runCatching { pm.getPackagesForUid(uid)?.firstOrNull() }.getOrNull()
+    private fun packageNamesOfUid(uid: Int): List<String> {
+        if (uid <= 0) return emptyList()
+        val pm = context?.packageManager ?: return emptyList()
+        return runCatching { pm.getPackagesForUid(uid)?.toList().orEmpty() }.getOrDefault(emptyList())
     }
 
     private fun log(message: String) {

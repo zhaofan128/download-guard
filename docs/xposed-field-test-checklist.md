@@ -3,8 +3,8 @@
 3.2.0 的三处硬阻断（signature 权限、getContext() 不存在、系统下载不删）都是**静态阅读就能发现**、
 但 CI 完全覆盖不到的问题；3.2.1 的 relay 调用方校验（`Binder.getCallingUid()` 用在
 BroadcastReceiver 里）同样是静态阅读就能判断不可靠——广播 onReceive 不是 Binder 调用线程，
-拿到的 UID 不是发送方。这份清单是 3.2.2（relay 改为 ContentProvider）修复后的真机复核项，
-全部手动，无自动化。
+拿到的 UID 不是发送方。这份清单是 **3.2.3**（relay 为 ContentProvider + 异步调用）修复后的
+真机复核项，全部手动，无自动化。
 **没有真机验证过的功能不要在 README / Release 里写成「已实测」。**
 
 ## 前置条件
@@ -31,6 +31,19 @@ BroadcastReceiver 里）同样是静态阅读就能判断不可靠——广播 o
 | 8 | 下载中途断网/切飞行模式再恢复 | 任务可恢复或报中文错误（「连接中断，下载不完整，请重试」一类），不出现 `java.io.IOException: Premature EOF` 这类裸异常 | 错误文案透出英文异常名 |
 | 9 | 模块 APK 未安装（只装了主 App）时在目标 App 里点下载 | 宿主不崩溃；Xposed 日志出现 relay 调用失败；系统下载照常（保留） | 宿主 App 闪退或下载丢失 |
 | 10 | 主 App 被强杀（设置里结束进程）后走场景 3 | relay 转发失败或主 App 收不到；系统下载保留（10 秒确认窗口过期后登记清理）；重开主 App 后候选列表可用 | 系统下载被删但主 App 没有任务（文件凭空蒸发） |
+| 11 | 连续点 3–5 个下载（含首次冷启动：先强杀模块所在进程再点） | 宿主 UI 不卡顿；logcat 无 `ANR in com.android.chrome`（或对应宿主）；Xposed 日志里 relay 在 `DG-Relay` 线程完成 | 点下载后宿主明显冻结数秒、或出现 ANR 对话框 |
+
+## 排查提示
+
+- **`IllegalArgumentException: Unknown URL content://com.dlguard.xposed.relay`**：
+  Android 11+ 的包可见性限制——宿主（浏览器/网盘）看不到模块包时解析不到 provider。
+  先确认模块已安装且未被停用；仍复现时记下宿主包名与系统版本，反馈时一并附上
+  （可能的兜底：宿主侧 `<queries>` 无法修改，需要换 relay 形态）。
+- **Xposed 日志出现「拒绝非宿主转发」但宿主明明是目标包**：
+  检查日志里打印的 caller 包列表；共享 UID 的 ROM（同 uid 多个浏览器包）已在 3.2.3
+  改为「任一包命中即放行」，若仍被拒说明该宿主包名不在名单里，补名单即可。
+- 所有 relay 日志都在 `DG-Relay` 后台线程执行（3.2.3 起），主线程只做内存登记——
+  如果日志显示 relay 在 `main` 线程，说明装的不是 3.2.3 的模块。
 
 ## 已知边界（如实告知用户）
 
