@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>帮助与联系 · 下载守护</title>
+<meta name="description" content="下载守护常见问题：安装提示未知来源、403 无法下载、文件找不到、断点续传失效、无障碍没反应，以及联系与数据删除方式。">
+<meta name="theme-color" content="#070c16">
+<link rel="icon" href="./assets/icon-512.png">
+<link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./index.html">
+      <img class="brand-mark" src="./assets/icon-512.png" alt="" width="30" height="30">
+      <span>下载守护</span>
+      <span class="brand-sub">DownloadGuard</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav">菜单</button>
+    <nav class="nav" id="nav" aria-label="主导航">
+      <a href="./index.html#features">功能</a>
+      <a href="./index.html#permissions">权限</a>
+      <a href="./privacy.html">隐私政策</a>
+      <a href="./terms.html">用户协议</a>
+      <a class="btn btn-primary btn-sm" data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">下载 APK</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="doc-hero">
+    <div class="wrap" style="max-width:900px">
+      <p class="kicker">Support</p>
+      <h1>帮助与联系</h1>
+      <p class="section-lead" style="max-width:44em">
+        先看下面几条，八成的「下不动」都在里面。仍然解决不了，把版本号、站点域名和报错原文发给我们。
+      </p>
+    </div>
+  </div>
+
+  <div class="wrap" style="max-width:900px;padding:44px 0 20px">
+    <div class="doc-body" style="max-width:none">
+      <div class="faq">
+        <details open>
+          <summary>安装时提示「未知来源」或「已阻止安装」</summary>
+          <p>
+            未在应用商店上架前，安装包通过 GitHub 分发，系统默认会拦。在提示里点「设置」，允许当前应用（浏览器或文件管理器）安装未知应用，再返回继续安装。
+            安装完成后建议把该权限关掉。商店版不申请安装权限，也无法静默安装其他 APK。
+          </p>
+        </details>
+
+        <details>
+          <summary>某个站点一直 403 / 401，浏览器能下、应用下不了</summary>
+          <p>
+            多数是防盗链：站点要求请求带上正确的 <code>Referer</code>，或校验登录后的 <code>Cookie</code>。
+            在「高级」里填一次 Referer（通常是那个页面的地址），或在「站点规则」里按域名保存下来，下次自动套用。
+            Cookie 可在浏览器开发者工具或站点规则里粘贴，注意只填 <code>name=value</code>，不要带 <code>Path</code>、<code>Domain</code> 这些属性。
+          </p>
+        </details>
+
+        <details>
+          <summary>下载速度上不去，或者到 99% 卡住</summary>
+          <p>
+            两个方向。一是把并发调低：部分站点对同一 IP 的并发连接有限制，连接越多越容易被限速甚至拒绝，试试从 32 降到 8 甚至 4。
+            二是目标服务器不支持 <code>Range</code>，只能单线程顺序下载，收尾阶段本来就会慢一些。可以换网络（Wi-Fi ↔ 移动数据）再试，任务会从断点继续。
+          </p>
+        </details>
+
+        <details>
+          <summary>下载完了，文件管理器里找不到</summary>
+          <p>
+            商店版把文件写在应用私有目录 <code>Android/data/com.dlguard/files/Download</code>，这是 Android 11 之后对未申请全盘权限的应用的标准做法。
+            在应用的下载列表里点「打开」，或长按选择「分享 / 导出」保存到相册或公共目录。
+            <strong>卸载应用会连同这些文件一起删除</strong>，请先导出。
+          </p>
+        </details>
+
+        <details>
+          <summary>换了手机 / 重装了，任务列表没了</summary>
+          <p>
+            本应用没有云端同步，任务与历史只存在本机，重装即清空。站点规则可以在规则页导出 JSON，换设备后导入即可复用。
+          </p>
+        </details>
+
+        <details>
+          <summary>开了「浏览器链接识别」，在微信里点链接没反应</summary>
+          <p>
+            这是设计如此。该服务只对浏览器生效，包名白名单不含任何聊天与社交应用。在浏览器里点击或长按一个指向文件的链接（<code>.apk</code>、<code>.zip</code>、<code>.pdf</code>、<code>.mp4</code> 等）才会被识别。
+            若浏览器里也没反应：确认服务在「系统设置 → 无障碍」中处于开启状态，并且该浏览器在支持列表内。
+          </p>
+        </details>
+
+        <details>
+          <summary>你们会不会记录我下载了什么</summary>
+          <p>
+            不会。没有账号体系，没有统计 SDK，下载记录只写在本机数据库。你可以断网使用除下载以外的全部功能来验证这一点。
+            详见 <a href="./privacy.html">隐私政策</a>。
+          </p>
+        </details>
+
+        <details>
+          <summary>怎么彻底删除我的数据</summary>
+          <p>
+            应用内删除单条任务，或「设置 → 清除数据」，或直接卸载应用。我们这边没有任何你的数据副本可供删除，因为从未上传。
+          </p>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <section class="section" id="contact">
+    <div class="wrap" style="max-width:900px">
+      <div class="split">
+        <div>
+          <p class="kicker">Contact</p>
+          <h2>联系我们</h2>
+          <p class="section-lead" style="margin-bottom:18px">
+            功能建议、Bug、误报、隐私相关请求都走这里。工作日一般 1–2 天回复。
+          </p>
+          <ul class="checklist">
+            <li>邮箱：<a data-site-mail="email" href="#">【联系邮箱】</a></li>
+            <li>问题跟踪：<a data-site-href="issues" href="https://github.com/zhaofan128/download-guard/issues" rel="noopener">GitHub Issues</a></li>
+            <li>源代码：<a data-site-href="repo" href="https://github.com/zhaofan128/download-guard" rel="noopener">zhaofan128/download-guard</a></li>
+          </ul>
+        </div>
+
+        <div>
+          <h3 style="margin-top:0;font-size:16px">反馈时请附上</h3>
+          <ul class="checklist no" style="margin-bottom:22px">
+            <li>应用版本（设置页底部，例如 3.4.0 / 36）</li>
+            <li>Android 版本与机型</li>
+            <li>目标站点域名（不必给完整链接，避免泄露私人地址）</li>
+            <li>报错的原文或截图</li>
+          </ul>
+
+          <h3 style="font-size:16px">数据删除请求模板</h3>
+          <pre class="codeblock">主题：下载守护 数据删除请求
+
+版本：
+机型 / Android 版本：
+请求内容：确认并删除与我相关的数据
+
+说明：本应用无账号体系、不上传数据，
+如需我自行清理，请回信告知操作路径。</pre>
+          <p style="font-size:13px;color:var(--muted);margin-top:10px">
+            实际上我们这边没有可删除的副本；这封邮件的作用是留下书面记录与回执。
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> <span data-site="operator">【开发者主体名称】</span></span>
+      <span class="sep">/</span>
+      <a class="icp" data-icp href="#">APP 备案：办理中</a>
+      <span class="sep">/</span>
+      <span>内容更新于 <span data-site="updated">2026-11-18</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="./site.config.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

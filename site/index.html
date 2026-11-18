@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>下载守护 · 本地多线程下载器（Android）</title>
+<meta name="description" content="下载守护是一个跑在手机本地的多线程下载器：断点续传、网页链接嗅探、按站点配置 Referer 与 Cookie。无广告、无账号，下载记录不出设备。">
+<meta name="theme-color" content="#070c16">
+<meta property="og:type" content="website">
+<meta property="og:title" content="下载守护 · 本地多线程下载器">
+<meta property="og:description" content="断点续传、网页嗅探、站点规则。无广告、无账号，下载记录留在本机。">
+<meta property="og:image" content="./assets/feature-graphic.png">
+<link rel="icon" href="./assets/icon-512.png">
+<link rel="apple-touch-icon" href="./assets/icon-512.png">
+<link rel="stylesheet" href="./assets/style.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "下载守护",
+  "alternateName": "DownloadGuard",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "Android 8.0+",
+  "softwareVersion": "3.4.0",
+  "inLanguage": "zh-CN",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" },
+  "description": "本地运行的多线程下载器，支持断点续传、网页链接嗅探、按站点配置请求头。无广告、无账号，不上传下载记录。"
+}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<div class="notice" id="config-banner" hidden>
+  <div class="wrap">
+    <span>站点还有 <b data-missing>主体名称、联系邮箱</b> 没填，正式提交前请打开 <code>site/site.config.js</code> 补上。这条提示填完会自动消失。</span>
+  </div>
+</div>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./index.html">
+      <img class="brand-mark" src="./assets/icon-512.png" alt="" width="30" height="30">
+      <span>下载守护</span>
+      <span class="brand-sub">DownloadGuard</span>
+    </a>
+
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav">菜单</button>
+
+    <nav class="nav" id="nav" aria-label="主导航">
+      <a href="#features">功能</a>
+      <a href="#permissions">权限</a>
+      <a href="./support.html">支持</a>
+      <a href="./privacy.html">隐私政策</a>
+      <a class="btn btn-primary btn-sm" data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">下载 APK</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="eyebrow">Android · 本地下载器 · 无广告</p>
+        <h1>把链接<span class="grad">变成文件</span>，<br>不绕远路。</h1>
+        <p class="lead">
+          下载守护是一个完全跑在你手机上的多线程下载器。分段并发、断点续传、网页链接嗅探，
+          还能按域名存好 Referer 与 Cookie —— 专治下载站的 403。
+          没有账号，没有广告，下载记录不出这台设备。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary btn-lg" data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">
+            下载 APK <span class="arrow">↓</span>
+          </a>
+          <a class="btn btn-ghost btn-lg" href="./privacy.html">看隐私政策</a>
+        </div>
+        <ul class="facts">
+          <li>版本 <span data-site="version">3.4.0</span></li>
+          <li>商店版仅 6 项权限</li>
+          <li>无账号 · 无内购 · 无统计 SDK</li>
+          <li>源代码公开</li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="panel" role="img" aria-label="下载守护任务列表界面示意：三个下载任务，分别处于进行中、进行中、已完成状态，底部显示当前站点规则">
+          <div class="panel-head">
+            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>任务队列</span>
+            <span class="live">3 运行中</span>
+          </div>
+
+          <div class="task">
+            <div class="task-top">
+              <span class="task-name">package-1.2.0.zip</span>
+              <span class="task-meta">62.4 / 118 MB · 32 线程</span>
+            </div>
+            <div class="bar"><span style="width:53%"></span></div>
+          </div>
+
+          <div class="task">
+            <div class="task-top">
+              <span class="task-name">example-video.mp4</span>
+              <span class="task-meta">214 / 940 MB · 24 线程</span>
+            </div>
+            <div class="bar"><span style="width:23%"></span></div>
+          </div>
+
+          <div class="task">
+            <div class="task-top">
+              <span class="task-name">archive-2026.tar.gz</span>
+              <span class="task-meta">1.4 GB · SHA-256 已校验</span>
+            </div>
+            <div class="bar done"><span style="width:100%"></span></div>
+          </div>
+
+          <div class="panel-foot">
+            <span class="chip">Referer: 页面</span>
+            <span class="chip">Cookie: 合并 2 域</span>
+            <span class="chip alt">UA: 自定义</span>
+            <span class="chip alt">并发 32</span>
+          </div>
+        </div>
+        <p class="panel-caption">界面示意 · 非实机截图</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 功能 -->
+  <section class="section" id="features">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Features</p>
+        <h2>该有的都有，不该有的一个没有</h2>
+        <p class="section-lead">不做浏览器、不做网盘、不做内容推荐。只把「给我一个地址，把它稳稳下下来」这件事做扎实。</p>
+      </div>
+
+      <div class="grid-3">
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">01</div>
+          <h3>多线程分段下载</h3>
+          <p>一个文件切成多段并发拉取，1 到 64 任意调。每段独立落盘，某一段失败只重传那一段，不用整包重来。</p>
+        </article>
+
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">02</div>
+          <h3>断点续传</h3>
+          <p>切 Wi-Fi、锁屏、被杀进程之后，从断点接着下。进度记在本地 <code>.part.meta</code> 里，不依赖服务器支持 Range 之外的任何东西。</p>
+        </article>
+
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">03</div>
+          <h3>网页链接嗅探</h3>
+          <p>在应用内打开下载站页面，自动找出页面里的真实文件地址。页面用系统 WebView 在本地解析，内容不上传。</p>
+        </article>
+
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">04</div>
+          <h3>站点规则，专治 403</h3>
+          <p>按域名存一套规则：Referer 取页面还是直链、Cookie 合并哪些域、用哪个 UA、初始并发多少、文件名怎么排。可导入导出、可测试，纯声明式配置。</p>
+        </article>
+
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">05</div>
+          <h3>分享即下载</h3>
+          <p>在浏览器或网盘里把链接分享给下载守护：直链直接建任务，分享页自动进嗅探模式。省掉复制、切应用、粘贴三步。</p>
+        </article>
+
+        <article class="feature">
+          <div class="feature-icon" aria-hidden="true">06</div>
+          <h3>收尾校验</h3>
+          <p>支持旁挂 <code>.sha256</code> / <code>.md5</code> 校验文件，收尾阶段本地算哈希。结果只给你看，不会自动执行任何文件。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 差异 -->
+  <section class="section" id="why">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Why another downloader</p>
+        <h2>它不靠你赚钱，所以不用盯着你</h2>
+        <p class="section-lead">大多数下载工具的收入来自广告和导流，于是要账号、要推送、要尽量多留一会儿。这个不是。</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">项目</th>
+              <th scope="col">常见手机下载器</th>
+              <th scope="col">下载守护</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>广告与推送</td>
+              <td>开屏、信息流、每日推送</td>
+              <td class="tick">无广告、无推送 SDK</td>
+            </tr>
+            <tr>
+              <td>账号体系</td>
+              <td>手机号注册、云收藏</td>
+              <td class="tick">不需要注册</td>
+            </tr>
+            <tr>
+              <td>下载记录去向</td>
+              <td>常与账号绑定、上传云端</td>
+              <td class="tick">只在本机数据库</td>
+            </tr>
+            <tr>
+              <td>请求头（Referer / Cookie / UA）</td>
+              <td>多数不可改，遇到 403 只能放弃</td>
+              <td class="tick">可按域名配置并复用</td>
+            </tr>
+            <tr>
+              <td>商店版权限</td>
+              <td>十几项，含存储、安装、设备信息</td>
+              <td class="tick">6 项，逐条写明用途</td>
+            </tr>
+            <tr>
+              <td>源代码</td>
+              <td>闭源</td>
+              <td class="tick">公开</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- 权限 -->
+  <section class="section" id="permissions">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Permissions</p>
+        <h2>权限表短到可以背下来</h2>
+        <p class="section-lead">下面就是商店版的全部权限，没有隐藏项。逐条用途与拒绝后的后果都在隐私政策第四节。</p>
+      </div>
+
+      <div class="perm-grid">
+        <div class="perm"><i aria-hidden="true"></i>INTERNET</div>
+        <div class="perm"><i aria-hidden="true"></i>ACCESS_NETWORK_STATE</div>
+        <div class="perm"><i aria-hidden="true"></i>POST_NOTIFICATIONS</div>
+        <div class="perm"><i aria-hidden="true"></i>FOREGROUND_SERVICE</div>
+        <div class="perm"><i aria-hidden="true"></i>FOREGROUND_SERVICE_DATA_SYNC</div>
+        <div class="perm"><i aria-hidden="true"></i>WAKE_LOCK</div>
+      </div>
+
+      <div class="split" style="margin-top:34px">
+        <div>
+          <h3 style="margin:0 0 14px;font-size:16px">明确不申请的权限</h3>
+          <ul class="checklist no">
+            <li>所有文件访问（MANAGE_EXTERNAL_STORAGE）</li>
+            <li>安装应用（REQUEST_INSTALL_PACKAGES）</li>
+            <li>通知使用权（读取其他应用的通知）</li>
+            <li>开机自启、精确闹钟</li>
+            <li>读取剪贴板</li>
+            <li>Shizuku / Root 特权</li>
+          </ul>
+        </div>
+        <div class="callout" style="margin:0">
+          <p><strong>关于「浏览器链接识别」（可选）</strong></p>
+          <p>商店版有一个默认关闭的无障碍服务：你在浏览器里点击或长按下载链接时，把链接地址交过来，省掉复制粘贴。它只对浏览器生效，只订阅点击与长按两种事件，不具备模拟点击能力，也不读取聊天与社交应用。不开也能正常用。</p>
+          <p style="margin-bottom:0"><a href="./privacy.html#a11y">看完整说明 →</a></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 版本 -->
+  <section class="section" id="builds">
+    <div class="wrap">
+      <div class="section-head">
+        <p class="kicker">Builds</p>
+        <h2>两个版本，同一把签名</h2>
+        <p class="section-lead">商店版为了过审砍掉了特权能力；需要 Shizuku、跨应用抓取、局域网接力的，用完整版。两者包名相同，不要同时装。</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">能力</th>
+              <th scope="col">商店版（各应用商店）</th>
+              <th scope="col">完整版（GitHub）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>多线程、续传、嗅探、站点规则、分享入口</td>
+              <td class="tick">有</td>
+              <td class="tick">有</td>
+            </tr>
+            <tr>
+              <td>浏览器链接识别（无障碍）</td>
+              <td>仅浏览器 · 仅点击事件</td>
+              <td>浏览器 + 可选社交应用内嵌页</td>
+            </tr>
+            <tr>
+              <td>通知监听 / 剪贴板识别</td>
+              <td class="cross">—</td>
+              <td class="tick">有</td>
+            </tr>
+            <tr>
+              <td>Shizuku 特权、全盘目录守护</td>
+              <td class="cross">—</td>
+              <td class="tick">有</td>
+            </tr>
+            <tr>
+              <td>内置 APK 安装器</td>
+              <td class="cross">—</td>
+              <td class="tick">有</td>
+            </tr>
+            <tr>
+              <td>下载目录</td>
+              <td>应用私有目录</td>
+              <td>公共 Download 或自选目录</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="margin-top:18px;font-size:13.5px;color:var(--muted)">
+        完整版的安装包、更新说明与校验和都在 <a data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">GitHub Releases</a>，每个包附 SHA-256，可自行核对。
+      </p>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="section">
+    <div class="wrap">
+      <div class="cta-band">
+        <div>
+          <h2>下载之前，先看两页纸</h2>
+          <p>隐私政策写清了每个权限干什么、数据存在哪；用户协议写清了什么能做、什么不能。</p>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <a class="btn btn-primary" href="./privacy.html">隐私政策</a>
+          <a class="btn btn-ghost" href="./terms.html">用户协议</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <a class="brand" href="./index.html">
+          <img class="brand-mark" src="./assets/icon-512.png" alt="" width="30" height="30">
+          <span>下载守护</span>
+        </a>
+        <p>本地运行的多线程下载器。不提供内容源，不收集下载记录，不接入广告与统计 SDK。</p>
+      </div>
+
+      <div class="footer-col">
+        <h4>产品</h4>
+        <ul>
+          <li><a href="#features">功能</a></li>
+          <li><a href="#permissions">权限说明</a></li>
+          <li><a data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">下载与更新</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>文档</h4>
+        <ul>
+          <li><a href="./privacy.html">隐私政策</a></li>
+          <li><a href="./terms.html">用户协议</a></li>
+          <li><a href="./support.html">帮助与联系</a></li>
+        </ul>
+      </div>
+
+      <div class="footer-col">
+        <h4>联系</h4>
+        <ul>
+          <li><a data-site-mail="email" href="#">邮箱</a></li>
+          <li><a data-site-href="issues" href="https://github.com/zhaofan128/download-guard/issues" rel="noopener">问题反馈</a></li>
+          <li><a data-site-href="repo" href="https://github.com/zhaofan128/download-guard" rel="noopener">源代码</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> <span data-site="operator">【开发者主体名称】</span></span>
+      <span class="sep">/</span>
+      <a class="icp" data-icp href="#">APP 备案：办理中</a>
+      <span class="sep" data-police-wrap hidden></span>
+      <a data-police href="#" hidden></a>
+      <span class="sep">/</span>
+      <span>内容更新于 <span data-site="updated">2026-11-18</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="./site.config.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

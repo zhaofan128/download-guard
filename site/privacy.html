@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>隐私政策 · 下载守护</title>
+<meta name="description" content="下载守护隐私政策：不收集个人身份信息，不接入广告与统计 SDK，下载记录与文件只保存在本机。含 6 项权限与可选无障碍服务的逐条说明。">
+<meta name="theme-color" content="#070c16">
+<meta property="og:type" content="article">
+<meta property="og:title" content="隐私政策 · 下载守护">
+<meta property="og:image" content="./assets/feature-graphic.png">
+<link rel="icon" href="./assets/icon-512.png">
+<link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <a class="brand" href="./index.html">
+      <img class="brand-mark" src="./assets/icon-512.png" alt="" width="30" height="30">
+      <span>下载守护</span>
+      <span class="brand-sub">DownloadGuard</span>
+    </a>
+    <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="nav">菜单</button>
+    <nav class="nav" id="nav" aria-label="主导航">
+      <a href="./index.html#features">功能</a>
+      <a href="./index.html#permissions">权限</a>
+      <a href="./support.html">支持</a>
+      <a href="./terms.html">用户协议</a>
+      <a class="btn btn-primary btn-sm" data-site-href="release" href="https://github.com/zhaofan128/download-guard/releases/latest" rel="noopener">下载 APK</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="doc-hero">
+    <div class="wrap">
+      <p class="kicker">Privacy Policy</p>
+      <h1>隐私政策</h1>
+      <p class="doc-meta">
+        <span>生效日期 <b data-site="updated">2026-11-18</b></span>
+        <span>适用版本 <b>3.4.0（商店版）</b></span>
+        <span>开发者 <b data-site="operator">【开发者主体名称】</b></span>
+      </p>
+    </div>
+  </div>
+
+  <div class="wrap doc">
+    <aside class="doc-toc" aria-label="目录">
+      <p>目录</p>
+      <ol>
+        <li><a href="#summary">一、一句话概括</a></li>
+        <li><a href="#not-collected">二、我们不收集什么</a></li>
+        <li><a href="#local-data">三、本机保存的数据</a></li>
+        <li><a href="#permissions">四、权限与用途</a></li>
+        <li><a href="#network">五、网络请求与请求头</a></li>
+        <li><a href="#sharing">六、共享与披露</a></li>
+        <li><a href="#third-party">七、第三方组件</a></li>
+        <li><a href="#minors">八、未成年人保护</a></li>
+        <li><a href="#rights">九、你的权利</a></li>
+        <li><a href="#security">十、数据安全</a></li>
+        <li><a href="#changes">十一、政策变更</a></li>
+        <li><a href="#contact">十二、联系我们</a></li>
+        <li><a href="#builds">附：两个版本的差异</a></li>
+      </ol>
+    </aside>
+
+    <article class="doc-body">
+      <p>
+        本政策适用于 Android 应用「下载守护」（包名 <code>com.dlguard</code>，以下称「本应用」）。
+        我们尽量用直白的语言说明：本应用做什么、不做什么、数据在哪里。
+      </p>
+
+      <h2 id="summary">一、一句话概括</h2>
+      <p>
+        本应用是一个<strong>本地下载工具</strong>。它不要求注册账号，不收集个人身份信息，不接入广告或统计 SDK，
+        不把下载记录、链接、Cookie 上传到任何开发者服务器。所有任务、设置与文件都保存在你的设备上。
+      </p>
+
+      <h2 id="not-collected">二、我们不收集什么</h2>
+      <ul>
+        <li>不收集姓名、手机号、身份证号、通讯录、短信、位置、IMEI、MAC 等个人信息。</li>
+        <li>不收集你在其他应用中的使用行为。</li>
+        <li>不读取通知内容（商店版已移除通知监听能力）。</li>
+        <li>不读取微信、QQ、钉钉等聊天与社交应用的内容（商店版的无障碍服务只对浏览器生效，见第四节）。</li>
+        <li>不读取剪贴板（商店版不会在后台或回到前台时自动读取剪贴板）。</li>
+        <li>不遍历已安装应用列表；仅在系统清单里声明「是否存在浏览器」，用于「用浏览器打开」这一可选入口，不上传。</li>
+        <li>不接入第三方广告、统计、崩溃上报、推送 SDK。</li>
+      </ul>
+
+      <h2 id="local-data">三、本机保存的数据</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">数据</th>
+              <th scope="col">位置</th>
+              <th scope="col">用途</th>
+              <th scope="col">删除方式</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>下载任务与历史记录</td>
+              <td>应用私有数据库（Room）</td>
+              <td>展示进度、续传、重新下载</td>
+              <td>应用内删除单条，或清除应用数据</td>
+            </tr>
+            <tr>
+              <td>设置项</td>
+              <td>应用私有 DataStore</td>
+              <td>记住并发数、通知、主题等偏好</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td>站点规则</td>
+              <td>应用私有 DataStore</td>
+              <td>按域名套用 Referer、Cookie 来源、UA、并发与文件名模板</td>
+              <td>规则页删除或清空</td>
+            </tr>
+            <tr>
+              <td>下载的文件</td>
+              <td>应用私有外部目录 <code>Android/data/com.dlguard/files/Download</code></td>
+              <td>你下载的内容</td>
+              <td>应用内删除，或卸载应用</td>
+            </tr>
+            <tr>
+              <td>崩溃现场（可选）</td>
+              <td>应用私有目录</td>
+              <td>本地排查闪退，不上传</td>
+              <td>设置页清除</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <p>卸载本应用会删除上述全部数据，<strong>包括已下载的文件</strong>。请在卸载前把需要的文件导出到公共目录，或通过系统分享保存到别处。</p>
+      </div>
+
+      <h2 id="permissions">四、权限与用途</h2>
+      <p>商店版只申请以下 6 项权限，逐条说明用途与拒绝后的后果：</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">权限</th>
+              <th scope="col">用途</th>
+              <th scope="col">拒绝的后果</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>INTERNET</code></td>
+              <td>连接你输入的下载地址，传输文件</td>
+              <td>无法下载</td>
+            </tr>
+            <tr>
+              <td><code>ACCESS_NETWORK_STATE</code></td>
+              <td>判断当前是否 Wi-Fi，用于「仅 Wi-Fi 下载」</td>
+              <td>仅 Wi-Fi 限制失效</td>
+            </tr>
+            <tr>
+              <td><code>POST_NOTIFICATIONS</code></td>
+              <td>显示下载进度与完成通知（Android 13 及以上）</td>
+              <td>收不到进度与完成提醒，下载仍会继续</td>
+            </tr>
+            <tr>
+              <td><code>FOREGROUND_SERVICE</code></td>
+              <td>退到后台时保持下载</td>
+              <td>退到后台后下载可能被系统暂停</td>
+            </tr>
+            <tr>
+              <td><code>FOREGROUND_SERVICE_DATA_SYNC</code></td>
+              <td>同上，声明前台服务类型（Android 14 及以上必需）</td>
+              <td>同上</td>
+            </tr>
+            <tr>
+              <td><code>WAKE_LOCK</code></td>
+              <td>下载收尾（写盘、校验哈希）时防止休眠中断</td>
+              <td>大文件收尾可能失败</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        本应用<strong>不申请</strong>：所有文件访问（<code>MANAGE_EXTERNAL_STORAGE</code>）、安装应用（<code>REQUEST_INSTALL_PACKAGES</code>）、
+        通知使用权、读取剪贴板、开机自启、精确闹钟、Shizuku 特权。
+      </p>
+
+      <h3 id="a11y">无障碍服务（可选，默认关闭）</h3>
+      <p>
+        商店版包含一个名为「下载链接识别」的无障碍服务，<strong>默认关闭</strong>，
+        只有你在设置页手动开启后才工作。
+      </p>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr>
+              <th scope="row">做什么</th>
+              <td>你在浏览器里点击或长按下载链接时，读取该链接的地址并加入下载候选，省去「长按复制 → 切回应用 → 粘贴」。</td>
+            </tr>
+            <tr>
+              <th scope="row">生效范围</th>
+              <td>只在浏览器应用内。包名白名单为 Chrome、Edge、Firefox、UC、夸克、QQ 浏览器以及华为 / 小米 / OPPO 自带浏览器等，<strong>不含任何聊天或社交应用</strong>。</td>
+            </tr>
+            <tr>
+              <th scope="row">事件范围</th>
+              <td>只订阅「点击」与「长按」两种事件。不订阅页面切换与内容变化，系统不会把页面内容持续推送给本服务。</td>
+            </tr>
+            <tr>
+              <th scope="row">不做什么</th>
+              <td>不读取键盘输入、不模拟点击、不操作其他应用、不记录浏览历史、不截图、不联网上传。</td>
+            </tr>
+            <tr>
+              <th scope="row">数据去向</th>
+              <td>命中的链接只写入本机内存中的候选列表；你点击「下载」后才开始网络请求。</td>
+            </tr>
+            <tr>
+              <th scope="row">如何关闭</th>
+              <td>设置页开关直接停用；或在「系统设置 → 无障碍 → 下载链接识别」中关闭。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>关闭该服务不影响其他任何功能：你仍然可以手动粘贴链接，或从浏览器通过系统分享发送给本应用。</p>
+
+      <h2 id="network">五、网络请求与请求头</h2>
+      <ol>
+        <li>本应用直接连接你提供的下载地址，不经过开发者服务器，也没有中转、解析或云端加速服务。</li>
+        <li>为了通过防盗链校验，你可能在「高级请求头」或「站点规则」中填写 Referer、Cookie、User-Agent。这些值<strong>只会发送给对应的下载站点</strong>，不会发送给开发者或任何第三方。</li>
+        <li>网页嗅探使用系统 WebView 打开你指定的页面，页面加载行为受该网站自身隐私政策约束。本应用只在本地解析页面中的链接，不上传页面内容。</li>
+        <li>本应用允许 HTTP 明文连接，因为部分下载站只提供 HTTP 直链。传输内容是否加密取决于目标站点，请优先使用 HTTPS 地址。</li>
+        <li>站点规则中的自定义 Cookie 保存在应用私有 DataStore，未 root 的设备上其他应用无法读取，但<strong>未做 Keystore 加密</strong>；导出的规则文件会自动清空自定义 Cookie 的值。</li>
+      </ol>
+
+      <h2 id="sharing">六、数据的共享、转让与公开披露</h2>
+      <p>我们不共享、不转让、不公开披露你的任何数据。以下情形除外：</p>
+      <ul>
+        <li>你主动通过系统分享面板把文件或文本分享给其他应用；</li>
+        <li>依据法律法规、司法或行政机关的强制性要求。</li>
+      </ul>
+
+      <h2 id="third-party">七、第三方组件</h2>
+      <p>本应用使用了以下开源库，它们仅在本机运行，不承担数据收集功能：</p>
+      <ul>
+        <li>OkHttp —— 网络请求</li>
+        <li>AndroidX / Jetpack Compose / Room / WorkManager / DataStore —— 界面、数据库、任务调度</li>
+        <li>Rhino —— 仅完整版使用；商店版已移除脚本插件</li>
+      </ul>
+      <p>本应用不包含广告 SDK、统计分析 SDK、社交登录 SDK、推送 SDK。</p>
+
+      <h2 id="minors">八、未成年人保护</h2>
+      <p>本应用不面向 14 周岁以下儿童单独提供服务，不收集儿童个人信息。未成年人应在监护人指导下使用。</p>
+
+      <h2 id="rights">九、你的权利</h2>
+      <ul>
+        <li><strong>查询与更正</strong>：设置页可查看全部本地配置。</li>
+        <li><strong>删除</strong>：任务、记录、规则均可在应用内删除；清除应用数据或卸载应用会删除全部本地数据。</li>
+        <li><strong>撤回同意</strong>：在系统设置中关闭通知、网络权限，或卸载应用。</li>
+        <li><strong>导出</strong>：站点规则支持导出 JSON；下载文件可通过系统分享导出。</li>
+        <li><strong>投诉</strong>：通过第十二节的邮箱联系我们，<span data-site="contactHours">15 个工作日内答复</span>。</li>
+      </ul>
+
+      <h2 id="security">十、数据安全</h2>
+      <ul>
+        <li>应用不建立账号体系，不持有你的任何凭据。</li>
+        <li>本地数据依赖 Android 应用沙箱隔离。</li>
+        <li>下载文件的完整性校验（SHA-256 / 签名）在本地完成，结果只显示给你。</li>
+      </ul>
+      <p>请注意：任何软件都无法保证绝对安全。请勿在不可信站点填写账号密码，勿下载来源不明的可执行文件。</p>
+
+      <h2 id="changes">十一、政策变更</h2>
+      <p>
+        本政策更新时，我们会在应用内「设置 → 关于」展示新版本，并更新本页顶部的生效日期。
+        涉及重大变更时，会在应用内显著提示。
+      </p>
+
+      <h2 id="contact">十二、联系我们</h2>
+      <p>如对本政策有疑问、投诉或数据删除请求，请联系：</p>
+      <ul>
+        <li>邮箱：<a data-site-mail="email" href="#">【联系邮箱】</a></li>
+        <li>开发者：<span data-site="operator">【开发者主体名称】</span></li>
+        <li>反馈入口：<a data-site-href="issues" href="https://github.com/zhaofan128/download-guard/issues" rel="noopener">GitHub Issues</a></li>
+      </ul>
+      <p>我们会在 <span data-site="contactHours">15 个工作日内答复</span>。</p>
+
+      <h2 id="builds">附：商店版与完整版的差异</h2>
+      <p>两个版本包名相同，但能力范围不同：</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">能力</th>
+              <th scope="col">完整版</th>
+              <th scope="col">商店版</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>无障碍服务</td>
+              <td>浏览器 + 可选社交应用内嵌页（点击与页面扫描）</td>
+              <td>仅浏览器，仅点击事件</td>
+            </tr>
+            <tr>
+              <td>通知监听</td>
+              <td>从其他应用的通知里取链接</td>
+              <td class="cross">移除</td>
+            </tr>
+            <tr>
+              <td>剪贴板监听</td>
+              <td>后台读取并识别链接</td>
+              <td class="cross">移除</td>
+            </tr>
+            <tr>
+              <td>Shizuku 特权</td>
+              <td>静默授权、目录写入</td>
+              <td class="cross">移除</td>
+            </tr>
+            <tr>
+              <td>APK 安装</td>
+              <td>内置安装器</td>
+              <td class="cross">移除，改用系统文件管理器</td>
+            </tr>
+            <tr>
+              <td>目录监听</td>
+              <td>公共 Download 与网盘缓存目录守护</td>
+              <td class="cross">移除，只写应用私有目录</td>
+            </tr>
+            <tr>
+              <td>接力网关</td>
+              <td>本地 HTTP 代理</td>
+              <td class="cross">移除</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>完整版通过 GitHub 单独分发，其数据处理方式以完整版随包说明为准。</p>
+
+      <div class="doc-foot">
+        <p>本页可直接打印或「另存为 PDF」，打印时会自动切换为白底版式。</p>
+        <p>最后更新：<span data-site="updated">2026-11-18</span> · <a href="./terms.html">用户协议</a> · <a href="./support.html">帮助与联系</a></p>
+      </div>
+    </article>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-bottom">
+      <span>© <span data-year>2026</span> <span data-site="operator">【开发者主体名称】</span></span>
+      <span class="sep">/</span>
+      <a class="icp" data-icp href="#">APP 备案：办理中</a>
+      <span class="sep">/</span>
+      <span>内容更新于 <span data-site="updated">2026-11-18</span></span>
+    </div>
+  </div>
+</footer>
+
+<script src="./site.config.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

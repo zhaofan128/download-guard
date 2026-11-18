@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://zhaofan128.github.io/download-guard/sitemap.xml
