@@ -21,13 +21,18 @@ import java.io.RandomAccessFile
 class DownloadedPartVerificationTest {
 
     private fun signedApk(): File? {
+        // 目录扫描而不是写死文件名：3.4.0 起产物路径带 flavor 子目录
         val candidates = listOf(
-            File("../app/build/outputs/apk/debug/app-debug.apk"),
-            File("app/build/outputs/apk/debug/app-debug.apk"),
-            File("../app/build/outputs/apk/release/app-release.apk"),
-            File("app/build/outputs/apk/release/app-release.apk")
-        )
-        return candidates.firstOrNull { it.isFile && it.length() > 4096 }
+            File("../app/build/outputs/apk/full/debug"),
+            File("app/build/outputs/apk/full/debug"),
+            File("../app/build/outputs/apk/full/release"),
+            File("app/build/outputs/apk/full/release"),
+            File("../app/build/outputs/apk/debug"),
+            File("app/build/outputs/apk/debug")
+        ).filter { it.isDirectory }.flatMap { dir ->
+            dir.listFiles { f -> f.isFile && f.extension.equals("apk", true) }?.toList() ?: emptyList()
+        }
+        return candidates.firstOrNull { it.length() > 4096 }
     }
 
     @Test

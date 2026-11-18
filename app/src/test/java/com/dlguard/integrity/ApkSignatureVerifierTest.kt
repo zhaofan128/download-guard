@@ -8,9 +8,12 @@ import java.io.File
 /**
  * 用真实签名的 APK 校验 v2 解析与摘要重算。
  *
- * 取样顺序：`dist/` 里的历史产物 → `app/build/outputs/apk/debug/app-debug.apk`。
- * 后者在 CI 里由 `assembleDebug` 现场生成，所以这三条用例在流水线上是真的会跑的，
+ * 取样顺序：`dist/` 里的历史产物 → 构建产物目录。
+ * 后者在 CI 里由 `assembleFullDebug` 现场生成，所以这三条用例在流水线上是真的会跑的，
  * 不是「没有样本就悄悄跳过、显示一片绿」。
+ *
+ * 3.4.0 起构建产物带 flavor 子目录（`apk/full/debug`），这里按目录扫而不是写死文件名，
+ * flavor 再变也不用改测试。
  */
 class ApkSignatureVerifierTest {
 
@@ -25,9 +28,13 @@ class ApkSignatureVerifierTest {
                 }?.toList() ?: emptyList()
             }
         val built = listOf(
-            File("../app/build/outputs/apk/debug/app-debug.apk"),
-            File("app/build/outputs/apk/debug/app-debug.apk")
-        ).filter { it.isFile }
+            File("../app/build/outputs/apk/full/debug"),
+            File("app/build/outputs/apk/full/debug"),
+            File("../app/build/outputs/apk/debug"),
+            File("app/build/outputs/apk/debug")
+        ).filter { it.isDirectory }.flatMap { dir ->
+            dir.listFiles { f -> f.isFile && f.extension.equals("apk", true) }?.toList() ?: emptyList()
+        }
         // 小于 4KB 的不是完整安装包，改字节做篡改用例也没有意义
         return (fromDist + built).filter { it.length() > 4096 }.distinctBy { it.absolutePath }
     }
