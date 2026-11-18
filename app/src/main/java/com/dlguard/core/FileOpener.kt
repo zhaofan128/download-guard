@@ -61,6 +61,11 @@ object FileOpener {
         val mime = if (isApk) APK_MIME else mimeOf(file)
 
         if (isApk) {
+            // 商店版没有 REQUEST_INSTALL_PACKAGES：调用安装器会被系统静默丢弃，
+            // 与其让用户以为「点了没反应」，不如明确告知走系统文件管理器。
+            if (com.dlguard.BuildConfig.STORE_BUILD) {
+                return Result.Failed("商店版不提供应用安装：文件已保存，请用系统「文件」应用打开")
+            }
             if (!allowInstall) return Result.InstallerDisabled
             // Android 8+ 未授权「安装未知应用」时，安装器会静默结束，这里提前拦下来给出引导
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !canInstall(context)) {

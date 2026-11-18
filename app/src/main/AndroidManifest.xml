@@ -204,20 +204,6 @@
             </intent-filter>
         </service>
 
-        <!-- 浏览器无障碍爬取：抓取 .apk 直链（Shizuku 可静默开启；无 Shizuku 手动到系统设置勾选） -->
-        <service
-            android:name=".service.DownloadAccessibilityService"
-            android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
-        </service>
-
         <!-- 特权剪贴板监听（前台 specialUse；Shizuku 走 shell uid，无 Shizuku 时降级前台读取） -->
         <service
             android:name=".service.ClipboardWatchService"

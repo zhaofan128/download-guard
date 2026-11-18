@@ -90,7 +90,10 @@ class NotificationHelper(private val context: Context) {
         running: Boolean,
         storageGranted: Boolean
     ): Notification {
-        val content = when {
+        val content = if (com.dlguard.BuildConfig.STORE_BUILD) {
+            // 商店版没有目录监听，常驻通知只承担「下载服务运行中」这一个事实
+            "下载服务运行中 · 点击返回应用"
+        } else when {
             !storageGranted -> "缺少全文件访问权限，无法监听公共下载目录"
             running -> "正在守护 $dirs 个下载目录 · 已校验 $checked · 损坏 $broken"
             else -> "守护已暂停，点击恢复"
@@ -112,7 +115,7 @@ class NotificationHelper(private val context: Context) {
         )
         return NotificationCompat.Builder(context, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_stat_guard)
-            .setContentTitle("浏览器下载接管")
+            .setContentTitle(if (com.dlguard.BuildConfig.STORE_BUILD) "DownloadGuard" else "浏览器下载接管")
             .setContentText(content)
             .setStyle(NotificationCompat.BigTextStyle().bigText(content))
             .setContentIntent(openIntent)
@@ -256,8 +259,8 @@ class NotificationHelper(private val context: Context) {
         )
         val builder = NotificationCompat.Builder(context, CHANNEL_ALERT)
             .setSmallIcon(R.drawable.ic_stat_guard)
-            .setContentTitle("发现安装包下载链接")
-            .setContentText("点击用内置加固下载器下载，完成后自动校验")
+            .setContentTitle("发现下载链接")
+            .setContentText("点击交给下载守护，支持断点续传与完整性校验")
             .setStyle(NotificationCompat.BigTextStyle().bigText(url))
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)

@@ -445,7 +445,16 @@ class PluginManager(
                 )
             )
         )
-    )
+    ).let { list ->
+        // 商店版把两类高风险能力从清单里彻底移除：
+        //  - URL 重写脚本：执行用户可编辑的 JS（动态代码）
+        //  - 浏览器下载桥：监听局域网端口接收外部任务（本地服务）
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            list.filter { it.id != ID_BROWSER_BRIDGE && it.id != ID_URL_REWRITE }
+        } else {
+            list
+        }
+    }
 
     private val _plugins = MutableStateFlow<List<Plugin>>(emptyList())
     val plugins = _plugins.asStateFlow()
@@ -607,6 +616,7 @@ class PluginManager(
     /** 属性变化时刷新：桥插件开关联动局域网服务。 */
     private fun applyBridge() {
         val enabled = isEnabled(ID_BROWSER_BRIDGE)
+        if (com.dlguard.BuildConfig.STORE_BUILD) return
         if (enabled && !lanServer.isRunning) {
             if (!lanServer.start()) {
                 prefs.edit().putBoolean("enabled_$ID_BROWSER_BRIDGE", false).apply()
@@ -662,9 +672,16 @@ class PluginManager(
                 )
             }
             .sortedByDescending { it.installedAt }
+        // 商店版不接受第三方插件：即使从完整版覆盖安装、磁盘上还留着旧插件，
+        // 也不加载、不执行，避免动态代码绕过商店审核
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            _plugins.value = emptyList()
+            return
+        }
         _plugins.value = list
         // 桥插件状态以本地开关为准做一次对齐（进程重启后服务需要按开关恢复）
-        if (isEnabled(ID_BROWSER_BRIDGE) &&
+        if (!com.dlguard.BuildConfig.STORE_BUILD &&
+            isEnabled(ID_BROWSER_BRIDGE) &&
             configValue(ID_BROWSER_BRIDGE, "autoStart", "true").toBoolean() &&
             !lanServer.isRunning
         ) {
@@ -681,6 +698,9 @@ class PluginManager(
 
     /** 从 zip 字节安装插件（市场下载与本地文件共用）。返回错误信息，空串表示成功。 */
     fun installFromBytes(bytes: ByteArray, source: String = "本地文件"): String {
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            return "商店版不支持安装第三方插件"
+        }
         return try {
             val entries = LinkedHashMap<String, ByteArray>()
             ZipInputStream(bytes.inputStream()).use { zip ->
@@ -784,6 +804,10 @@ class PluginManager(
     }
 
     fun installFromUrl(url: String, onDone: (String) -> Unit) {
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            onDone("商店版不支持在线安装插件")
+            return
+        }
         scope.launch {
             onDone(downloadAndInstall(url))
         }
@@ -791,6 +815,10 @@ class PluginManager(
 
     /** 从 GitHub 仓库整包安装：支持 `owner/repo`、仓库页地址或 zip 直链。 */
     fun installFromGithub(input: String, onDone: (String) -> Unit) {
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            onDone("商店版不支持在线安装插件")
+            return
+        }
         val zip = MarketSource.zipUrl(input)
         if (zip == null) {
             onDone("无法识别仓库地址，请填 owner/repo（例如 dlguard/plugins）")
@@ -887,6 +915,11 @@ class PluginManager(
      * ```
      */
     fun refreshMarket(onDone: (String) -> Unit = {}) {
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            _market.value = builtins
+            onDone("商店版仅包含官方内置能力，不提供在线插件市场")
+            return
+        }
         val input = marketUrl.trim()
         if (input.isBlank()) {
             _market.value = builtins

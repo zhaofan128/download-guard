@@ -106,8 +106,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        ShizukuHelper.init(applicationContext)
-        ShizukuHelper.setPermissionResultListener(shizukuPermissionListener)
+        if (!BuildConfig.STORE_BUILD) {
+            ShizukuHelper.init(applicationContext)
+            ShizukuHelper.setPermissionResultListener(shizukuPermissionListener)
+        }
         readIntent(intent)
         setContent {
             val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -177,14 +179,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 每次回前台都核对 Shizuku 状态：binder 往返放后台，主线程只读 StateFlow。
-        // 原来直接 refresh() 在 Shizuku 未运行时要等多次 binder 超时，是最容易触发的 ANR 路径。
-        ShizukuHelper.refreshAsync()
-        // 连接仍未送达且当前没有索取任务时再补一次：覆盖「打开 Shizuku 启动服务后回到本应用」的路径
-        if (ShizukuHelper.status.value == ShizukuHelper.Status.BINDER_PENDING &&
-            !ShizukuHelper.isRequesting()
-        ) {
-            ShizukuHelper.requestBinder()
+        if (!BuildConfig.STORE_BUILD) {
+            // 每次回前台都核对 Shizuku 状态：binder 往返放后台，主线程只读 StateFlow。
+            // 原来直接 refresh() 在 Shizuku 未运行时要等多次 binder 超时，是最容易触发的 ANR 路径。
+            ShizukuHelper.refreshAsync()
+            // 连接仍未送达且当前没有索取任务时再补一次：覆盖「打开 Shizuku 启动服务后回到本应用」的路径
+            if (ShizukuHelper.status.value == ShizukuHelper.Status.BINDER_PENDING &&
+                !ShizukuHelper.isRequesting()
+            ) {
+                ShizukuHelper.requestBinder()
+            }
         }
         viewModel.refreshPermissions()
         viewModel.refreshQuarantine()
@@ -194,7 +198,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        ShizukuHelper.removePermissionResultListener(shizukuPermissionListener)
+        if (!BuildConfig.STORE_BUILD) {
+            ShizukuHelper.removePermissionResultListener(shizukuPermissionListener)
+        }
         super.onDestroy()
     }
 }

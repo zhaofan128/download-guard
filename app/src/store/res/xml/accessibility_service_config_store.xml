@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  商店版无障碍配置。每一项都刻意收窄，配置本身就是给审核看的用途声明：
+
+    accessibilityEventTypes   只有点击/长按。没有 typeWindowStateChanged、
+                              没有 typeWindowContentChanged —— 系统不会把页面内容
+                              变化推给本服务，「持续监听屏幕」在配置层就不成立。
+    accessibilityFlags        只有 flagReportViewIds。没有 flagIncludeNotImportantViews，
+                              不读那些对辅助功能无意义的装饰性节点。
+    canRetrieveWindowContent  必需：要读被点击节点的文本才知道链接地址。
+    canPerformGestures         未声明：本服务不会点击、滑动、输入。
+    canRequestFilterKeyEvents  未声明：不读取按键。
+    notificationTimeout       300ms，点击到读取之间不做排队。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewClicked|typeViewLongClicked"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/store_accessibility_desc"
+    android:notificationTimeout="300"
+    android:summary="@string/store_accessibility_summary" />

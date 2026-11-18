@@ -60,7 +60,8 @@ sha256sum "${FILES[@]}" > CHECKSUMS.txt
 
 if [ "$APK_COUNT" -eq 0 ]; then
   echo "注意：dist 下没有 APK，CHECKSUMS.txt 目前只含桌面版与扩展包。" >&2
-  echo "      Android 包要用正式 keystore 出（./gradlew :app:assembleRelease），" >&2
+  echo "      Android 包要用正式 keystore 出：./gradlew :app:assembleFullRelease（完整版）
+      或 ./gradlew :app:assembleStoreRelease（商店版），" >&2
   echo "      改名成 DownloadGuard-$VERSION-arm64.apk / -universal.apk 放进 dist 后重跑本脚本。" >&2
 fi
 

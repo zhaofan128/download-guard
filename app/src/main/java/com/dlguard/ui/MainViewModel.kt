@@ -199,6 +199,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 进入首页时调用：没给「所有文件访问」就自动弹一次向导。 */
     fun maybeAutoShowPermissionGuide() {
+        // 商店版下载到应用私有目录，不存在「要用户去开所有文件访问」这一步
+        if (com.dlguard.BuildConfig.STORE_BUILD) return
         if (autoGuideShown) return
         if (PermissionHelper.hasStorageAccess(getApplication())) return
         autoGuideShown = true
@@ -225,7 +227,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun ensureServiceRunningIfAllowed() {
         val context = getApplication<Application>()
-        if (!PermissionHelper.hasStorageAccess(context)) return
+        // 商店版下载到应用私有目录，不需要「所有文件访问」；用全盘权限做门槛会导致服务永不启动
+        if (!com.dlguard.BuildConfig.STORE_BUILD && !PermissionHelper.hasStorageAccess(context)) return
         if (GuardState.snapshot.value.running || GuardState.snapshot.value.paused) return
         viewModelScope.launch {
             val settings = runCatching { container.settings.settings.first() }.getOrNull() ?: return@launch
@@ -699,6 +702,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 前台时读取剪贴板（Android 10+ 后台读取会被系统拒绝，因此只在可见时检测）。 */
     fun checkClipboard() {
+        // 商店版不自动读取剪贴板：链接由用户手动粘贴或系统分享进入，行为更可解释
+        if (com.dlguard.BuildConfig.STORE_BUILD) return
         val context = getApplication<Application>()
         if (!settings.value.clipboardWatch) return
         // 直链嗅探由插件控制：插件关闭后不再自动提取，避免与用户预期冲突

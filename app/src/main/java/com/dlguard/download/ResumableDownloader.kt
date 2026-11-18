@@ -1415,6 +1415,16 @@ class ResumableDownloader(
     }
 
     private fun resolveTargetDir(): File {
+        // 商店版没有 MANAGE_EXTERNAL_STORAGE：公共下载目录在 Android 11+ 不可写。
+        // 统一落到应用私有外部目录，完成后用 FileProvider 打开/分享导出，行为可预期且无需授权。
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            val privateDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            if (privateDir != null) {
+                if (!privateDir.exists()) privateDir.mkdirs()
+                return privateDir
+            }
+            return context.filesDir
+        }
         val public = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
         if (public != null && (public.exists() || public.mkdirs()) && public.canWrite()) return public
         val fallback = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)

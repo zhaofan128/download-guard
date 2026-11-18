@@ -159,14 +159,18 @@ fun HomeScreen(
     ) {
         item {
             Header(
-                permissionsOk = permissions.storage && permissions.notifications,
+                permissionsOk = if (com.dlguard.BuildConfig.STORE_BUILD) {
+                    permissions.notifications
+                } else {
+                    permissions.storage && permissions.notifications
+                },
                 titleFont = settings.titleFont,
                 onPillClick = {
                     if (permissions.storage) onOpenSettings() else viewModel.openPermissionGuide()
                 }
             )
         }
-        if (shizukuStatus != ShizukuHelper.Status.READY) {
+        if (!com.dlguard.BuildConfig.STORE_BUILD && shizukuStatus != ShizukuHelper.Status.READY) {
             item {
                 ShizukuCard(
                     status = shizukuStatus,

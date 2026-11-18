@@ -37,7 +37,7 @@ jobs:
       # 先出 Debug 包：验签用例需要真实签名的 APK 作为样本，
       # 没有样本它们会 assumeTrue 跳过——跳过不算失败，但会掩盖问题。
       - name: 编译 Debug 包
-        run: ./gradlew :app:assembleDebug --console=plain
+        run: ./gradlew :app:assembleFullDebug --console=plain
 
       # Xposed 模块默认不参与构建，但它的编译错误 CI 必须能看到：
       # 回传链路（RelayProvider + GuardHook）是 3.2.2 重做的，没这一步等于没有回归网。
@@ -54,7 +54,7 @@ jobs:
         run: python3 scripts/check-host-packages.py
 
       - name: 执行 JVM 单元测试
-        run: ./gradlew :app:testDebugUnitTest --console=plain --stacktrace
+        run: ./gradlew :app:testFullDebugUnitTest --console=plain --stacktrace
 
       # Gradle 里「一个用例都没跑到」也会是 BUILD SUCCESSFUL（比如测试源集被改坏），
       # 所以这里直接读 JUnit XML，用例数为 0 或少得不正常就判失败。
@@ -66,7 +66,7 @@ jobs:
           import xml.etree.ElementTree as ET
 
           total = failed = skipped = 0
-          files = glob.glob("app/build/test-results/testDebugUnitTest/*.xml")
+          files = glob.glob("app/build/test-results/testFullDebugUnitTest/*.xml")
           for path in files:
               root = ET.parse(path).getroot()
               total += int(root.get("tests", 0))
@@ -88,7 +88,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-report
-          path: app/build/reports/tests/testDebugUnitTest
+          path: app/build/reports/tests/testFullDebugUnitTest
           retention-days: 7
           if-no-files-found: ignore
 
@@ -117,13 +117,13 @@ jobs:
       # 正式签名包：只用于验证「签名配置没坏」+ 给维护者一个可直接下载的产物。
       - name: 构建正式签名包
         if: env.HAS_ANDROID_KEY == 'true'
-        run: ./gradlew :app:assembleRelease --console=plain
+        run: ./gradlew :app:assembleFullRelease --console=plain
 
       - name: 核对签名证书
         if: env.HAS_ANDROID_KEY == 'true'
         run: |
           set -euo pipefail
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          APK=$(ls app/build/outputs/apk/full/release/*.apk | head -1)
           # apksigner 不在 ubuntu runner 的 PATH 里，只在 SDK 的 build-tools 下，
           # 所以要自己找。找不到就直接失败，不能跳过核对。
           APKSIGNER=$(command -v apksigner || true)
@@ -147,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: signed-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/full/release/*.apk
           retention-days: 7
           if-no-files-found: error
 

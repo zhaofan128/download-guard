@@ -37,6 +37,7 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -98,6 +99,10 @@ fun SettingScreen(
     val quarantineBytes by viewModel.quarantineBytes.collectAsStateWithLifecycle()
     val guard by viewModel.guard.collectAsStateWithLifecycle()
     val siteRules by viewModel.siteRules.collectAsStateWithLifecycle()
+    val accessibilityRunning by settingViewModel.accessibilityRunning.collectAsStateWithLifecycle()
+    // 从系统设置返回后开关要跟着变，所以每次进入设置页都核对一次真实状态
+    LaunchedEffect(Unit) { settingViewModel.refreshAccessibilityState() }
+    var showAccessibilityGuide by remember { mutableStateOf(false) }
 
     var showAddDir by rememberSaveable { mutableStateOf(false) }
     var showClearQuarantine by rememberSaveable { mutableStateOf(false) }
@@ -124,7 +129,11 @@ fun SettingScreen(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "守护 ${guard.directories} 个目录 · ${if (guard.running) "服务运行中" else "服务未运行"}",
+                    text = if (com.dlguard.BuildConfig.STORE_BUILD) {
+                        "多线程下载 · 网页嗅探 · 站点规则"
+                    } else {
+                        "守护 ${guard.directories} 个目录 · ${if (guard.running) "服务运行中" else "服务未运行"}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -135,6 +144,7 @@ fun SettingScreen(
             Section("守护行为") {
                 SettingSwitch(
                     title = "开机自启动",
+                    storeVisible = false,
                     subtitle = "收到 BOOT_COMPLETED / 覆盖安装后自动拉起前台服务",
                     checked = settings.autoStart,
                     hapticEnabled = settings.haptics,
@@ -156,20 +166,43 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "接管剪贴板链接",
+                    storeVisible = false,
                     subtitle = "发现 apk/apks/xapk 直链时提醒一键极速下载（Shizuku 授权后后台静默监听）",
                     checked = settings.clipboardWatch,
                     hapticEnabled = settings.haptics,
                     onCheckedChange = settingViewModel::setClipboardWatch
                 )
                 SettingSwitch(
-                    title = "浏览器链接爬取（无障碍）",
-                    subtitle = "监听浏览器节点树，点击/长按安装包直链时自动抓取；Shizuku 可一键静默开启",
-                    checked = settings.accessibilityCapture,
+                    title = if (com.dlguard.BuildConfig.STORE_BUILD) {
+                        "浏览器链接识别（无障碍）"
+                    } else {
+                        "浏览器链接爬取（无障碍）"
+                    },
+                    subtitle = if (com.dlguard.BuildConfig.STORE_BUILD) {
+                        "在浏览器里点击或长按下载链接时自动加入候选，省去复制粘贴。" +
+                            "只对浏览器生效，不读取聊天与社交应用、不记录浏览历史"
+                    } else {
+                        "监听浏览器节点树，点击/长按安装包直链时自动抓取；Shizuku 可一键静默开启"
+                    },
+                    // 商店版以系统里的真实启用状态为准：用户可能直接去系统设置关掉
+                    checked = if (com.dlguard.BuildConfig.STORE_BUILD) {
+                        accessibilityRunning
+                    } else {
+                        settings.accessibilityCapture
+                    },
                     hapticEnabled = settings.haptics,
-                    onCheckedChange = settingViewModel::setAccessibilityCapture
+                    onCheckedChange = { checked ->
+                        if (checked && com.dlguard.BuildConfig.STORE_BUILD) {
+                            // 首次开启先讲清用途与边界：审核看「有无前置告知」，用户看「会不会读我聊天」
+                            showAccessibilityGuide = true
+                        } else {
+                            settingViewModel.setAccessibilityCapture(checked)
+                        }
+                    }
                 )
                 SettingSwitch(
                     title = "跨应用抓取（微信/QQ 内嵌页）",
+                    storeVisible = false,
                     subtitle = "把抓取范围扩到社交/网盘 App 的内嵌 WebView：只识别 .apk/.zip/.pdf/.mp4 等文件直链，" +
                         "不读取、不记录聊天与浏览内容；默认关闭",
                     checked = settings.crossAppCapture,
@@ -178,6 +211,7 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "自动接收网盘下载",
+                    storeVisible = false,
                     subtitle = "网盘 App 走系统下载器时直接建任务，接管成功后自动删掉系统那份（需要 LSPosed 模块）；" +
                         "浏览器内置下载器无法从外部取消，只进候选列表不自动下载，用候选列表手动确认",
                     checked = settings.autoIntake,
@@ -186,6 +220,7 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "无障碍心跳保活",
+                    storeVisible = false,
                     subtitle = "每 20 秒检测无障碍状态，被系统杀掉后自动写回开启（需 Shizuku）",
                     checked = settings.autoRepairAccessibility,
                     hapticEnabled = settings.haptics,
@@ -193,6 +228,7 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "允许安装应用",
+                    storeVisible = false,
                     subtitle = "点击校验完成的 APK 时调用系统安装器，标准安装方式，不需要 Shizuku 或 root",
                     checked = settings.allowInstaller,
                     hapticEnabled = settings.haptics,
@@ -214,6 +250,7 @@ fun SettingScreen(
                 )
                 SettingSwitch(
                     title = "从下载通知抓取链接",
+                    storeVisible = false,
                     subtitle = "需额外授予「通知使用权」；抓到链接后，损坏文件可直接一键重下",
                     checked = settings.captureNotificationLinks,
                     hapticEnabled = settings.haptics,
@@ -265,6 +302,7 @@ fun SettingScreen(
             }
         }
 
+        if (!com.dlguard.BuildConfig.STORE_BUILD) {
         item {
             RelaySection(
                 settings = settings,
@@ -275,7 +313,9 @@ fun SettingScreen(
                 onTest = settingViewModel::testRelay
             )
         }
+        }
 
+        if (!com.dlguard.BuildConfig.STORE_BUILD) {
         item {
             CollapsibleSection(
             title = "Shizuku 特权中枢",
@@ -305,9 +345,11 @@ fun SettingScreen(
                 )
             }
         }
+        }
 
         item {
             Section("权限与保活") {
+                if (!com.dlguard.BuildConfig.STORE_BUILD) {
                 PermissionRow(
                     title = "所有文件访问权限",
                     subtitle = if (permissions.storage) {
@@ -318,6 +360,7 @@ fun SettingScreen(
                     granted = permissions.storage,
                     onClick = { viewModel.openPermissionGuide() }
                 )
+                }
                 PermissionRow(
                     title = "通知权限",
                     subtitle = if (permissions.notifications) "已开启，可收到损坏告警" else "未开启，损坏告警无法展示",
@@ -370,73 +413,75 @@ fun SettingScreen(
             }
         }
 
-        item {
-            Section("监听目录") {
-                Text(
-                    text = "内置目录",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                    modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
-                )
-                BuiltInDirChips()
-                Spacer(Modifier.height(12.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        if (!com.dlguard.BuildConfig.STORE_BUILD) {
+            item {
+                Section("监听目录") {
                     Text(
-                        text = "自定义目录",
+                        text = "内置目录",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
                     )
-                    Text(
-                        text = "添加",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier
-                            .clickable {
-                                addDirText = ""
-                                showAddDir = true
-                            }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-                if (customDirs.isEmpty()) {
-                    Text(
-                        text = "尚未添加。可添加网盘自定义缓存目录的绝对路径。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(vertical = 6.dp)
-                    )
-                } else {
-                    customDirs.forEach { dir ->
-                        Row(
+                    BuiltInDirChips()
+                    Spacer(Modifier.height(12.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "自定义目录",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "添加",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = dir.path,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "添加于 ${Formatters.shortTime(dir.addedAt)}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                .clickable {
+                                    addDirText = ""
+                                    showAddDir = true
+                                }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                    if (customDirs.isEmpty()) {
+                        Text(
+                            text = "尚未添加。可添加网盘自定义缓存目录的绝对路径。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 6.dp)
+                        )
+                    } else {
+                        customDirs.forEach { dir ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = dir.path,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = "添加于 ${Formatters.shortTime(dir.addedAt)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Filled.Delete,
+                                    contentDescription = "移除目录",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clickable { viewModel.removeCustomDir(dir.path) }
+                                        .padding(4.dp)
                                 )
                             }
-                            Icon(
-                                imageVector = Icons.Filled.Delete,
-                                contentDescription = "移除目录",
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .clickable { viewModel.removeCustomDir(dir.path) }
-                                    .padding(4.dp)
-                            )
                         }
                     }
                 }
@@ -621,6 +666,64 @@ fun SettingScreen(
                 showClearRecords = false
             },
             onDismiss = { showClearRecords = false }
+        )
+    }
+
+    if (showAccessibilityGuide) {
+        // 开启无障碍前的告知。不是走形式：这段文字同时是审核时「用途正当性」的直接依据，
+        // 所以把「做什么」「不做什么」「怎么关」三件事写全，且不夸大能力。
+        AlertDialog(
+            onDismissRequest = { showAccessibilityGuide = false },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("开启浏览器链接识别") },
+            text = {
+                Column {
+                    Text(
+                        text = "做什么",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "你在浏览器里点击或长按一个下载链接（.apk、.zip、.pdf、.mp4 等）时，" +
+                            "读取这条链接的地址并加入下载候选，省去「长按复制、切回应用、粘贴」。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "不做什么",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "不读取微信、QQ 等聊天与社交应用；不记录浏览历史；不读取键盘输入；" +
+                            "不模拟点击、不操作其他应用；不向任何服务器上传内容。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "如何关闭",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        text = "本页开关可随时关闭；也可在「系统设置 → 无障碍 → 下载链接识别」中停用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f)
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showAccessibilityGuide = false
+                    settingViewModel.setAccessibilityCapture(true)
+                }) { Text("去开启") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAccessibilityGuide = false }) { Text("取消") }
+            }
         )
     }
 }
@@ -928,8 +1031,11 @@ private fun SettingSwitch(
     subtitle: String,
     checked: Boolean,
     hapticEnabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    storeVisible: Boolean = true
 ) {
+    // 商店版没有对应权限/服务，开关留在界面上只会让审核和用户都困惑
+    if (!storeVisible && com.dlguard.BuildConfig.STORE_BUILD) return
     Row(
         modifier = Modifier
             .fillMaxWidth()

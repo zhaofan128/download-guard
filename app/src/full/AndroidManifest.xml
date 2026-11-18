@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  完整版（旁加载 / GitHub Release）独占的组件声明。
+
+  为什么单独拆出来：商店版必须保证 APK 里**不存在**这些组件与它们的配置文件，
+  否则审核要为一个用不到的能力做解释。把声明放在 full 源集后，store 变体在
+  资源合并阶段就拿不到 accessibility_service_config.xml，也不会有这个 service 节点。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+
+        <!--
+          完整版无障碍：抓取浏览器与（可选）社交应用内嵌页里的安装包直链。
+          与商店版 StoreLinkAccessibilityService 的差别在于事件范围更宽：
+          额外订阅页面切换与内容变化，用于跨应用场景；这条能力不进商店包。
+        -->
+        <service
+            android:name=".service.DownloadAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+
+</manifest>

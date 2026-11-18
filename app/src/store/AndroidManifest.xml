@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  应用商店版清单覆盖。
+
+  原则：不是「运行时关掉」，而是在清单合并阶段把节点删掉。
+  审核工具读的是最终 APK，只要权限或组件还在，BuildConfig 里藏多深都没用。
+
+  被移除的能力与原因：
+    MANAGE_EXTERNAL_STORAGE / READ / WRITE  —— 全盘文件访问，商店重点审核项；
+                                               商店版改存应用私有目录，经系统分享/打开导出
+    REQUEST_INSTALL_PACKAGES                —— 应用分发资质，下载器不应内置安装器
+    Shizuku 权限 / Provider / queries       —— 系统提权通道，国内外商店均不接受
+    完整版无障碍服务                        —— 含跨应用抓取与页面内容轮询，商店无法解释；
+                                               替换为 StoreLinkAccessibilityService（见下）
+    通知监听                                —— 读取其他应用通知，必拒
+    剪贴板后台监听                          —— 后台读剪贴板，必拒
+    Xposed 回传接收器                       —— 与提权模块联动，必拒
+    开机自启 / 精确闹钟 / 看门狗             —— 非核心用途的保活，减少审核问询
+    接力网关（本地 HTTP 代理）               —— 代理形态需额外说明，商店版直接去掉
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ===== 权限：物理移除 ===== -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.RECEIVE_BOOT_COMPLETED"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:node="remove" />
+    <uses-permission
+        android:name="moe.shizuku.manager.permission.API_V23"
+        tools:node="remove" />
+    <uses-permission
+        android:name="com.dlguard.permission.SEND_CAPTURED_URL"
+        tools:node="remove" />
+
+    <!-- 自定义签名权限本身也一并移除，避免商店扫描到「声明了签名级权限」 -->
+    <permission
+        android:name="com.dlguard.permission.SEND_CAPTURED_URL"
+        tools:node="remove" />
+
+    <!-- 不再查询 Shizuku 管理器；浏览器包可见性保留（插件页要显示已装浏览器） -->
+    <queries>
+        <package android:name="moe.shizuku.privileged.api" tools:node="remove" />
+        <package android:name="rikka.suda" tools:node="remove" />
+        <provider android:authorities="rikka.shizuku.manager.MAIN" tools:node="remove" />
+    </queries>
+
+    <application
+        android:allowBackup="false"
+        tools:replace="android:allowBackup"
+        tools:node="merge">
+
+        <!-- Shizuku SDK 的 AAR 会自动合并这个 meta-data；不移除等于告诉审核「本应用支持 Shizuku」 -->
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            tools:node="remove" />
+
+        <!-- 前台服务类型改为 dataSync：商店版不再监听公共目录，没有 specialUse 的正当理由 -->
+        <service
+            android:name=".service.MonitorService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false"
+            tools:node="replace" />
+
+        <!-- ===== 组件：物理移除 ===== -->
+        <service
+            android:name=".relay.RelayService"
+            tools:node="remove" />
+        <service
+            android:name=".service.DownloadLinkListener"
+            tools:node="remove" />
+        <service
+            android:name=".service.DownloadAccessibilityService"
+            tools:node="remove" />
+        <service
+            android:name=".service.ClipboardWatchService"
+            tools:node="remove" />
+
+        <!--
+          商店版保留一个最小化的无障碍服务：只识别浏览器里的下载链接。
+
+          与完整版的关键差别（审核可直接对照）：
+            - 包名白名单只有浏览器，不含任何聊天/社交/内容应用
+            - 配置只订阅点击/长按，不订阅页面切换与内容变化
+            - 只在点击回调内读一次节点，不做定时扫描
+            - 未申请 canPerformGestures，不会模拟点击
+
+          用途可一句话说明：用户点了浏览器里的下载链接，省掉「长按复制再粘贴」。
+        -->
+        <service
+            android:name=".service.StoreLinkAccessibilityService"
+            android:exported="true"
+            android:label="@string/store_accessibility_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config_store" />
+        </service>
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            tools:node="remove" />
+        <receiver
+            android:name=".service.BootReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name=".service.WatchdogReceiver"
+            tools:node="remove" />
+        <receiver
+            android:name=".service.CapturedUrlReceiver"
+            tools:node="remove" />
+    </application>
+
+</manifest>

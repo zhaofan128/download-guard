@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  商店版独立的应用名。
+  完整版叫「浏览器下载接管」（强调接管系统下载），但商店审核对名称里的
+  「接管」比较敏感，容易被理解为劫持其他应用，因此商店版用中性名称。
+-->
+<resources>
+    <string name="app_name">下载守护</string>
+    <string name="app_desc">多线程下载 · 网页嗅探 · 站点规则</string>
+
+    <!--
+      无障碍服务的系统设置页文案。
+      这两条会原样显示在「设置 → 无障碍 → 下载守护」里，是审核与用户的第一解释入口，
+      必须写清：做什么、范围多大、不做什么。
+    -->
+    <string name="store_accessibility_label">下载链接识别</string>
+    <string name="store_accessibility_summary">识别浏览器里的下载链接</string>
+    <string name="store_accessibility_desc">只在浏览器中工作：当你点击或长按一个下载链接（如 .apk、.zip、.pdf、.mp4）时，读取该链接的地址并加入下载候选，省去长按复制的步骤。不读取聊天与社交应用，不记录浏览历史，不模拟点击，不读取键盘输入，不联网上传任何内容。随时可在系统设置中关闭。</string>
+</resources>

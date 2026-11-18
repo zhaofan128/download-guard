@@ -2,7 +2,8 @@
 """
 静态检查：主 App 与 Xposed 模块两侧的「已知宿主包名」列表必须完全一致。
 
-  - app/src/main/java/com/dlguard/service/CapturedUrlReceiver.kt  → KNOWN_HOST_PACKAGES
+  - app/src/full/java/com/dlguard/service/CapturedUrlReceiver.kt  → KNOWN_HOST_PACKAGES
+    （3.4.0 起该文件属于 full 源集：商店版不接收 Xposed 回传，类不进商店包）
   - xposed/src/main/java/com/dlguard/xposed/GuardHook.kt          → TARGET_PACKAGES
 
 确认回执按宿主包名定向发送、模块按列表拒绝转发；两侧不同步就会出现
@@ -16,7 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 FILES = {
-    "主 App (KNOWN_HOST_PACKAGES)": ROOT / "app/src/main/java/com/dlguard/service/CapturedUrlReceiver.kt",
+    "主 App (KNOWN_HOST_PACKAGES)": ROOT / "app/src/full/java/com/dlguard/service/CapturedUrlReceiver.kt",
     "Xposed 模块 (TARGET_PACKAGES)": ROOT / "xposed/src/main/java/com/dlguard/xposed/GuardHook.kt",
 }
 

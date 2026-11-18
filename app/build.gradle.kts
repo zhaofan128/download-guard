@@ -20,8 +20,8 @@ android {
         applicationId = "com.dlguard"
         minSdk = 26
         targetSdk = 34
-        versionCode = 35
-        versionName = "3.3.0"
+        versionCode = 36
+        versionName = "3.4.0"
 
         vectorDrawables { useSupportLibrary = true }
         resourceConfigurations += listOf("zh", "en")
@@ -52,6 +52,26 @@ android {
                 enableV2Signing = true
                 enableV3Signing = true
             }
+        }
+    }
+
+    /**
+     * 两个分发通道：
+     *  - full ：GitHub / 官网旁加载，保留 Shizuku、无障碍、通知监听、Xposed 回传等增强能力
+     *  - store：应用商店版，只保留「下载器」本体，敏感权限与组件在清单合并阶段物理移除
+     *
+     * 不靠运行时开关「假装关闭」：商店审核读的是最终 APK 的 manifest，
+     * 声明了再用 BuildConfig 关掉，权限依然在，照样会被拒。
+     */
+    flavorDimensions += "channel"
+    productFlavors {
+        create("full") {
+            dimension = "channel"
+            buildConfigField("boolean", "STORE_BUILD", "false")
+        }
+        create("store") {
+            dimension = "channel"
+            buildConfigField("boolean", "STORE_BUILD", "true")
         }
     }
 

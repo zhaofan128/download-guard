@@ -142,6 +142,8 @@ class MonitorService : Service() {
      *  2. 剪贴板监听开关联动：开关开着但服务没在跑 → 拉起；开关关了但服务还活着 → 停掉。
      */
     private fun startHeartbeat() {
+        // 商店版已移除无障碍与剪贴板服务，心跳没有可联动的对象
+        if (com.dlguard.BuildConfig.STORE_BUILD) return
         heartbeatJob?.cancel()
         heartbeatJob = serviceScope.launch(Dispatchers.IO) {
             while (isActive) {
@@ -184,6 +186,12 @@ class MonitorService : Service() {
 
     @Synchronized
     private fun startGuard() {
+        // 商店版：没有 MANAGE_EXTERNAL_STORAGE，也没有目录监听这条业务线。
+        // 服务只作为下载期间的进程保活载体，不创建 DownloadWatcher、不扫公共目录。
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            GuardState.update { it.copy(running = false, paused = false, directories = 0) }
+            return
+        }
         if (!isUserUnlocked()) {
             Log.i(TAG, "设备未解锁，等待 ACTION_USER_UNLOCKED 后再启动监控")
             return
@@ -313,8 +321,13 @@ class MonitorService : Service() {
             running = snapshot.running && !snapshot.paused,
             storageGranted = granted
         )
+        // 类型必须与最终 manifest 声明一致：商店版是 dataSync，完整版是 specialUse
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            if (com.dlguard.BuildConfig.STORE_BUILD) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            }
         } else {
             0
         }

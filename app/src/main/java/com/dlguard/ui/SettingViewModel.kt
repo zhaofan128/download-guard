@@ -54,6 +54,10 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
     val settings: StateFlow<GuardSettings> = container.settings.settings
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), GuardSettings())
 
+    /** 无障碍服务是否真的被系统启用（与本地偏好分开，商店版靠它驱动开关）。 */
+    private val _accessibilityRunning = MutableStateFlow(false)
+    val accessibilityRunning: StateFlow<Boolean> = _accessibilityRunning.asStateFlow()
+
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
 
@@ -189,7 +193,21 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
             // 这几步要读 Settings.Secure（ContentResolver IPC）、跑 Shizuku user service 的 shell，
             // 都在主线程会直接卡住；首次安装后 Shizuku 未就绪时一次 exec 能等上数秒 → ANR。
             val running = withContext(Dispatchers.IO) { isAccessibilityServiceEnabled() }
+            _accessibilityRunning.value = running
             when {
+                // 商店版没有 Shizuku：开=跳系统设置，关=服务自己 disableSelf()，不必再跑一趟设置
+                com.dlguard.BuildConfig.STORE_BUILD -> when {
+                    !value -> {
+                        val stopped = com.dlguard.service.StoreLinkAccessibilityService.disableSelfIfRunning()
+                        _accessibilityRunning.value = false
+                        emit(if (stopped) "已关闭浏览器链接识别" else "已关闭浏览器链接识别")
+                    }
+                    running -> emit("浏览器链接识别已在运行")
+                    else -> {
+                        PermissionHelper.openAccessibilitySettings(context)
+                        emit("请在系统无障碍设置中开启「下载链接识别」")
+                    }
+                }
                 !value -> {
                     if (ShizukuHelper.hasPermission()) {
                         withContext(Dispatchers.IO) { PrivilegeOps.disableSelfAccessibility() }
@@ -214,6 +232,16 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
             }
         }.onFailure {
             runCatching { viewModelScope.launch { container.settings.setAccessibilityCapture(!value) } }
+        }
+    }
+
+    /**
+     * 商店版的开关以**系统里的真实启用状态**为准，而不是本地偏好：
+     * 用户可能直接去系统设置关掉服务，App 内的开关必须跟着变。
+     */
+    fun refreshAccessibilityState() {
+        viewModelScope.launch {
+            _accessibilityRunning.value = withContext(Dispatchers.IO) { isAccessibilityServiceEnabled() }
         }
     }
 
@@ -302,6 +330,10 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
 
     /** 开启网关：没有接入码就生成一个 6 位码，客户端照着输。 */
     fun startRelayGateway() = hotSwitch("relay_gateway_on") {
+        if (com.dlguard.BuildConfig.STORE_BUILD) {
+            emit("商店版未包含接力网关")
+            return@hotSwitch Result.success(Unit)
+        }
         runCatching {
             val current = settings.value
             val token = current.relayToken.takeIf { it.length >= 4 }
@@ -460,11 +492,18 @@ class SettingViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun isAccessibilityServiceEnabled(): Boolean =
-        android.provider.Settings.Secure.getString(
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        // 两个 flavor 用的是不同的服务类：完整版含跨应用抓取，商店版只做浏览器
+        val cls = if (com.dlguard.BuildConfig.STORE_BUILD) {
+            "com.dlguard.service.StoreLinkAccessibilityService"
+        } else {
+            "com.dlguard.service.DownloadAccessibilityService"
+        }
+        return android.provider.Settings.Secure.getString(
             context.contentResolver,
             android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        )?.contains("$context.packageName/com.dlguard.service.DownloadAccessibilityService") == true
+        )?.contains("${context.packageName}/$cls") == true
+    }
 }
 
 /** Shizuku 授权结果的桥接（Activity 实现后把结果抛回 UI 层）。 */

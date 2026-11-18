@@ -22,10 +22,16 @@ class DownloadGuardApp : Application() {
         // 黑匣子必须最先安装：任何未捕获异常（含协程冒泡）都会留下现场
         CrashGuard.install(this)
         container = AppContainer(this)
-        // Shizuku 授权中枢尽早初始化：开机自启时剪贴板/无障碍服务可能先于 Activity 运行
-        ShizukuHelper.init(this)
+        // Shizuku 授权中枢尽早初始化：开机自启时剪贴板/无障碍服务可能先于 Activity 运行。
+        // 商店版没有声明 Shizuku 权限与 Provider，初始化只会空转，直接跳过。
+        if (!BuildConfig.STORE_BUILD) {
+            ShizukuHelper.init(this)
+        }
         runCatching { NotificationHelper(this).createChannels() }
-        runCatching { ServiceController.scheduleWatchdog(this) }
+        // 商店版没有精确闹钟与开机自启，看门狗这条路径整体关闭
+        if (!BuildConfig.STORE_BUILD) {
+            runCatching { ServiceController.scheduleWatchdog(this) }
+        }
         watchNetworkChange()
     }
 
