@@ -13,7 +13,7 @@
 | 分类 | 工具 > 下载 |
 | 年龄分级 | 3+ / 全年龄（无社交、无支付、无用户生成内容） |
 | 价格 | 免费，无内购，无广告 |
-| 隐私政策 URL | 【发布后的公网地址】 |
+| 隐私政策 URL | `https://zhaofan128.github.io/download-guard/privacy.html`（临时验证地址；正式提交前换成已备案域名下的 `/privacy.html`） |
 | 备案号 | 【APP 备案号】 |
 
 ## 一句话简介（≤ 80 字）
@@ -81,7 +81,8 @@
 ```
 下载守护 3.4.0
 APP 备案号：【备案号】
-隐私政策：【公网 URL】
+隐私政策：https://zhaofan128.github.io/download-guard/privacy.html
 开源地址：https://github.com/zhaofan128/download-guard
+官网：https://zhaofan128.github.io/download-guard/
 联系邮箱：【联系邮箱】
 ```

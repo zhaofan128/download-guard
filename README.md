@@ -7,6 +7,9 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-1.9.22-7f52ff.svg)](https://kotlinlang.org)
 [![Desktop](https://img.shields.io/badge/Desktop-Windows%20%7C%20macOS%20%7C%20Linux-6d5df6.svg)](#电脑版windows--macos--linux)
 
+> 官网与文档站：<https://zhaofan128.github.io/download-guard/> ｜ 隐私政策：<https://zhaofan128.github.io/download-guard/privacy.html>
+> 站点源码在 [`site/`](site/)，纯静态、零外部依赖，改 `site/site.config.js` 即可换成自己的主体与备案号。
+
 一个不需要 root 的下载工具：**把浏览器里点不动的下载按钮接过来**，用最多 256 连接把文件拉快，多个任务并行排队、随时暂停继续，下完再逐字节校验，确认没坏才交给你。2.2.0 起内置完整的 **BT / 磁力下载**；**3.0.0 起有了电脑版**——与手机版功能对等、代码各自独立的 Java 实现，Windows / macOS / Linux 通用，界面自适应 320px 手机到 4K 桌面；**3.1.1** 把本机服务对浏览器的信任边界收紧、修掉「未知长度下载假完成」与「APK 签名校验名不副实」；**3.2.0** 加上浏览器接管——网盘网页里点下载，链接连同 Referer 与登录 Cookie 直接进这里，不用再复制粘贴；**3.2.1** 修掉 3.2.0 的集成问题：扩展端口发现改为 8765–8794（原区间与默认端口对不上，默认启动时配对必失败）、Android 回传链路重做、接管开关默认关、跨 JDK 错误文案归一；**3.2.2** 把 Android 回传的 relay 从广播改成 ContentProvider——广播接收器里拿不到可靠的发送方身份（`Binder.getCallingUid()` 只在 Binder 线程有效），provider 的 `call()` 天生在 Binder 线程执行，宿主校验才算真的成立；**3.2.3** 把 relay 移到后台线程（Provider 冷启动时在宿主 UI 线程同步调用会卡顿甚至 ANR），共享 UID 宿主改为「任一包命中即放行」；**3.3.0** 把「不同网盘的请求头差异」变成可导入导出的站点规则（Referer / Cookie 来源 / UA / 并发 / 文件名模板），嗅探页同时合并页面域与直链域 Cookie，并加了分享入口与首页高级请求头；**3.4.0** 拆出应用商店变体——同一份代码编 `full` 与 `store` 两个包，权限与组件在清单合并阶段分离，商店包从 dex 到资源都不含 Shizuku、通知监听、剪贴板监听、APK 安装与全盘访问，只保留一个**最小化无障碍服务**（仅浏览器、仅点击事件、未声明 `canPerformGestures`，因此不具备模拟操作能力）。完整版能力一个不少，继续走 GitHub。
 
 > 很多下载站的「下载」按钮是 JS 绑定的，长按复制不到真实地址；很多浏览器下大文件只给单线程；很多 APK 下完才发现签名被改过；磁力链接浏览器根本打不开。这四件事，它一起解决。
