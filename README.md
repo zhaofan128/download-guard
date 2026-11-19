@@ -83,7 +83,10 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 ## 下载
 
-**[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
+| 平台 | 版本 | 地址 |
+| --- | --- | --- |
+| Android | 3.4.0 | [Releases · v3.4.0](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.0)（APK） |
+| Windows / macOS / Linux | 3.4.2 | [Releases · v3.4.2](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.2)（免安装 exe / jar） |
 
 3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等。版本号各自独立：桌面版修 bug 不必重发 APK。当前桌面版 `3.4.2`，Android 版 `3.4.0`。
 
