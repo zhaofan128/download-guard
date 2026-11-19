@@ -25,5 +25,8 @@ window.SITE = {
   version: "3.4.0",
   versionCode: "36",
   repo: "https://github.com/zhaofan128/download-guard",
+  // APK 固定在 Android 版本，桌面版指向最新发布（两个版本号各自独立，不能共用 latest）
+  apkRelease: "https://github.com/zhaofan128/download-guard/releases/tag/v3.4.0",
+  desktopRelease: "https://github.com/zhaofan128/download-guard/releases/latest",
   contactHours: "15 个工作日内答复"
 };
