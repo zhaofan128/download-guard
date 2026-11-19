@@ -21,6 +21,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -814,9 +815,31 @@ public final class Server {
         OutputStream os = ex.getResponseBody();
         sseOutputs.add(os);
         long lastBeat = System.currentTimeMillis();
+        // 每条连接自己记指纹：多个页面同时开着时互不影响，也不会把别的连接发过的当成已发
+        Cursor cursor = new Cursor();
+        boolean first = true;
         try {
             while (running) {
-                String payload = Json.write(decorate(engine.state()));
+                String payload;
+                if (first) {
+                    payload = Json.write(decorate(engine.state()));
+                    for (Task t : engine.snapshot()) cursor.sigs.put(t.id, t.sig());
+                    cursor.stats = statsKey(engine.snapshot());
+                    first = false;
+                } else {
+                    payload = buildPatch(cursor);
+                    if (payload == null) {
+                        // 没有任何变化：不发数据帧，只保留心跳，避免浏览器每秒解析一遍空状态
+                        long idle = System.currentTimeMillis();
+                        if (idle - lastBeat > 15_000) {
+                            os.write(": ping\n\n".getBytes(StandardCharsets.UTF_8));
+                            os.flush();
+                            lastBeat = idle;
+                        }
+                        Thread.sleep(900);
+                        continue;
+                    }
+                }
                 os.write(("data: " + payload + "\n\n").getBytes(StandardCharsets.UTF_8));
                 os.flush();
                 long now = System.currentTimeMillis();
@@ -834,6 +857,73 @@ public final class Server {
             sseOutputs.remove(os);
             try { os.close(); } catch (IOException ignored) { }
         }
+    }
+
+    /** 一条 SSE 连接的增量游标。 */
+    private static final class Cursor {
+        final Map<String, String> sigs = new LinkedHashMap<>();
+        String stats = "";
+    }
+
+    private static String statsKey(List<Task> snap) {
+        long speed = 0;
+        int downloading = 0;
+        int completed = 0;
+        for (Task t : snap) {
+            speed += Math.max(0, t.speed);
+            if ("downloading".equals(t.status)) downloading++;
+            if ("completed".equals(t.status)) completed++;
+        }
+        return speed + "/" + downloading + "/" + completed + "/" + snap.size();
+    }
+
+    /**
+     * 只推变化的任务。返回 null 表示这一拍什么都没有变，不必占带宽。
+     * 首次全量仍由 {@link Engine#state()} 负责，浏览器打开抽屉时拿到的分段明细不会丢。
+     */
+    private String buildPatch(Cursor cursor) {
+        List<Task> snap = engine.snapshot();
+        Map<String, String> sigs = cursor.sigs;
+        List<Object> changed = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        long speed = 0;
+        int downloading = 0;
+        int completed = 0;
+        for (Task t : snap) {
+            seen.add(t.id);
+            speed += Math.max(0, t.speed);
+            if ("downloading".equals(t.status)) downloading++;
+            if ("completed".equals(t.status)) completed++;
+            String sig = t.sig();
+            if (!sig.equals(sigs.get(t.id))) {
+                sigs.put(t.id, sig);
+                // 活跃任务带分段明细（抽屉里的分片进度要动），已完成的不带，省一大截字节
+                changed.add(t.toMap(t.isActive()));
+            }
+        }
+        List<Object> removed = new ArrayList<>();
+        for (String id : new ArrayList<>(sigs.keySet())) {
+            if (!seen.contains(id)) {
+                sigs.remove(id);
+                removed.add(id);
+            }
+        }
+        String stats = speed + "/" + downloading + "/" + completed + "/" + snap.size();
+        if (changed.isEmpty() && removed.isEmpty() && stats.equals(cursor.stats)) return null;
+        cursor.stats = stats;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("patch", true);
+        m.put("version", Engine.VERSION);
+        m.put("tasks", changed);
+        m.put("removed", removed);
+        m.put("settings", engine.settings.toMap());
+        m.put("stats", Json.obj(
+                "speed", speed,
+                "downloading", downloading,
+                "completed", completed,
+                "total", snap.size()
+        ));
+        return Json.write(m);
     }
 
     // ------------------------------------------------------------------ 工具

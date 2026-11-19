@@ -175,6 +175,7 @@ public final class Main {
         System.out.println();
 
         if (openBrowser) Util.browse(server.localUrl());
+        DesktopTray.install(engine, server, server.localUrl());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             try {

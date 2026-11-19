@@ -11,7 +11,9 @@
     view: 'all',
     filter: 'all',
     search: '',
+    limit: 60,
     drawerId: null,
+    drawerKey: '',
     dirTarget: null,
     dirCurrent: '',
     settingsLoaded: false,
@@ -161,7 +163,25 @@
   }
 
   function applyState(data) {
-    if (!data || !data.tasks) return;
+    if (!data) return;
+    if (data.patch) {
+      // 增量帧：只带变了的任务。合并进本地列表，静态字段（URL、保存路径、分段明细）保持原样
+      if (!state.data) return;
+      const map = new Map(state.data.tasks.map((t) => [t.id, t]));
+      (data.tasks || []).forEach((t) => {
+        const old = map.get(t.id);
+        if (old) Object.assign(old, t);
+        else map.set(t.id, t);
+      });
+      (data.removed || []).forEach((id) => map.delete(id));
+      data.tasks = Array.from(map.values());
+      data.settings = data.settings || state.data.settings;
+      data.env = state.data.env;
+      data.stats = data.stats || state.data.stats;
+      data.version = data.version || state.data.version;
+      data.port = state.data.port;
+    }
+    if (!data.tasks) return;
     state.data = data;
     if (!state.settingsLoaded) {
       fillSettings(data.settings, data.env);
@@ -253,18 +273,28 @@
       const q = state.search.trim().toLowerCase();
       list = list.filter((t) => (t.name || '').toLowerCase().includes(q) || (t.url || '').toLowerCase().includes(q));
     }
-    // 进行中优先，其次按创建时间倒序
+    // 进行中优先；已完成/已取消按完成时间倒序。分页后这一条很重要：
+    // 一个任务刚下完就从「下载中」组跳到「已完成」组，如果按创建时间排，
+    // 它会掉到几百条记录后面，用户以为文件没了。
     const rank = { downloading: 0, verifying: 1, queued: 2, paused: 3, error: 4, completed: 5, cancelled: 6 };
-    list.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || (b.createdAt || 0) - (a.createdAt || 0));
+    const stamp = (t) => (t.status === 'completed' || t.status === 'cancelled')
+      ? (t.finishedAt || t.createdAt || 0)
+      : (t.createdAt || 0);
+    list.sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || stamp(b) - stamp(a));
     return list;
   }
 
   function renderList() {
     const list = $('#taskList');
-    const tasks = visibleTasks();
+    const all = visibleTasks();
+    // 活跃/暂停/失败的任务永远全部渲染，再往后带 60 条历史。
+    // 否则「刚下完」的任务一进入已完成组，就可能被上百条历史记录挤出可见区。
+    const alive = all.filter((t) => ['downloading', 'verifying', 'queued', 'paused', 'error'].includes(t.status)).length;
+    const cap = Math.max(state.limit, alive + 60);
+    const tasks = all.slice(0, cap);
     const empty = $('#emptyState');
-    empty.hidden = tasks.length > 0;
-    list.hidden = tasks.length === 0;
+    empty.hidden = all.length > 0;
+    list.hidden = all.length === 0;
 
     const existing = new Map($$('.task', list).map((el) => [el.dataset.id, el]));
     let cursor = list.firstElementChild;
@@ -285,6 +315,13 @@
       updateTask(el, t);
     }
     existing.forEach((el) => el.remove());
+
+    const more = $('#listMore');
+    if (more) {
+      const rest = all.length - tasks.length;
+      more.hidden = rest <= 0;
+      if (rest > 0) more.textContent = `还有 ${rest} 个任务，点击加载`;
+    }
   }
 
   function createTask(t) {
@@ -332,8 +369,16 @@
   }
 
   function updateTask(el, t) {
-    const ref = el._refs;
     const st = STATUS[t.status] || STATUS.paused;
+    // 没变就整张卡片都不碰。300 个任务时这一句省掉的是每秒几千次样式写入
+    const sig = t.status + '|' + t.done + '|' + t.size + '|' + t.speed + '|' + t.eta
+      + '|' + (t.stage || '') + '|' + (t.error || '') + '|' + (t.verify || '')
+      + '|' + (t.signature || '') + '|' + (t.name || '') + '|' + (t.finishedAt || 0)
+      + '|' + (t.connections || 0) + '|' + (t.warning || '');
+    if (el._sig === sig) return;
+    el._sig = sig;
+
+    const ref = el._refs;
     el.className = 'task ' + st.cls;
     ref.icon.className = 'task-icon kind-' + (t.kind || 'HTTP').toLowerCase()
       + (t.status === 'completed' ? ' state-done' : t.status === 'error' ? ' state-error' : '');
@@ -392,7 +437,11 @@
       ref.err.textContent = '';
     }
 
-    ref.actions.innerHTML = actionsFor(t);
+    const actsHtml = actionsFor(t);
+    if (ref.actions._html !== actsHtml) {
+      ref.actions.innerHTML = actsHtml;
+      ref.actions._html = actsHtml;
+    }
   }
 
   function actionsFor(t) {
@@ -457,6 +506,7 @@
 
   function closeDrawer() {
     state.drawerId = null;
+    state.drawerKey = '';
     $('#drawer').classList.remove('show');
     if (!$('#newSheet').classList.contains('show') && !$('#dirSheet').classList.contains('show')) {
       $('#scrim').classList.remove('show');
@@ -467,91 +517,124 @@
     if (!t) return;
     const st = STATUS[t.status] || STATUS.paused;
     const segs = t.segments || [];
-    const rows = [
-      ['文件大小', t.size ? fmtSize(t.size) : '未知（服务器未提供 Content-Length）'],
-      ['已下载', fmtSize(t.done) + (t.size ? `（${pct(t).toFixed(1)}%）` : '')],
-      ['连接数', t.connections || '—'],
-      ['开始时间', fmtTime(t.createdAt)],
-      ['结束时间', t.finishedAt ? fmtTime(t.finishedAt) : '—'],
-      ['来源类型', t.kind],
-      ['状态', st.text]
-    ];
-    const grid = rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('');
-    const segGrid = segs.length > 1 ? `<div class="detail-block"><span>分段（共 ${segs.length} 段，颜色越满越接近完成）</span>
-      <div class="seg-grid">${segs.map((s) => {
-        const q = s.end >= s.start ? Math.min(100, (s.done / (s.end - s.start + 1)) * 100) : 0;
-        return `<i style="--p:${q.toFixed(1)}%" title="${(q).toFixed(1)}%"></i>`;
-      }).join('')}</div></div>` : '';
 
-    const hashBlock = t.sha256 ? `
-      <div class="detail-block"><span>SHA-256</span>
-        <div class="copy-row"><code>${esc(t.sha256)}</code>
-        <button class="icon-btn" data-copy="${esc(t.sha256)}" aria-label="复制 SHA-256">${icon('i-copy')}</button></div>
-      </div>` : '';
+    // 结构指纹：只有这些字段变了才重建 DOM。速度与进度走下面的原地更新，
+    // 否则抽屉打开时每秒重写一次 innerHTML，按钮会被替换，正在点的鼠标就落空了。
+    const key = [t.id, t.status, t.name, t.size, t.verify, t.signature, t.warning, t.error,
+      t.finalPath, t.dir, t.url, t.sha256, t.connections, t.createdAt, t.finishedAt,
+      t.signer, t.signerSubject, t.signatureDetail, segs.length].join('|');
 
-    const sigState = t.signature === 'verified' ? '已验证'
-      : t.signature === 'failed' ? '校验失败'
-        : t.signature === 'unsupported' ? '未验证' : '未验证';
-    const sigBlock = (t.signer || t.signatureDetail) ? `
-      <div class="detail-block"><span>APK 签名（${esc(t.scheme || '未知方案')}）· ${sigState}</span>
-        ${t.signer ? `<div class="copy-row"><code>${esc(t.signer)}</code>
-        <button class="icon-btn" data-copy="${esc(t.signer)}" aria-label="复制证书指纹">${icon('i-copy')}</button></div>` : ''}
-        ${t.signerSubject ? `<code>${esc(t.signerSubject)}</code>` : ''}
-        ${t.signatureDetail ? `<code>${esc(t.signatureDetail)}</code>` : ''}
-      </div>` : '';
+    if (key !== state.drawerKey) {
+      state.drawerKey = key;
 
-    const errBlock = t.status === 'error' && t.error ? `<div class="error-box">${esc(t.error)}</div>` : '';
-    const warnBlock = t.warning ? `<div class="warning-box">${esc(t.warning)}</div>` : '';
-    const verifyBlock = t.verify === 'mismatch'
-      ? `<div class="error-box">哈希与期望值不一致，文件${t.finalPath ? '已隔离到：' + esc(t.finalPath) : '未通过校验'}</div>` : '';
+      const rows = [
+        ['文件大小', t.size ? fmtSize(t.size) : '未知（服务器未提供 Content-Length）'],
+        ['已下载', fmtSize(t.done) + (t.size ? `（${pct(t).toFixed(1)}%）` : '')],
+        ['连接数', t.connections || '—'],
+        ['开始时间', fmtTime(t.createdAt)],
+        ['结束时间', t.finishedAt ? fmtTime(t.finishedAt) : '—'],
+        ['来源类型', t.kind],
+        ['状态', st.text]
+      ];
+      const grid = rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('');
+      const segGrid = segs.length > 1 ? `<div class="detail-block"><span>分段（共 ${segs.length} 段，颜色越满越接近完成）</span>
+        <div class="seg-grid">${segs.map((s) => {
+          const q = s.end >= s.start ? Math.min(100, (s.done / (s.end - s.start + 1)) * 100) : 0;
+          return `<i style="--p:${q.toFixed(1)}%" title="${(q).toFixed(1)}%"></i>`;
+        }).join('')}</div></div>` : '';
 
-    let acts = '';
-    if (t.status === 'downloading' || t.status === 'queued') acts += `<button class="ghost-btn" data-act="pause">${icon('i-pause')}暂停</button>`;
-    if (t.status === 'paused' || t.status === 'error') acts += `<button class="primary-btn" data-act="${t.status === 'error' ? 'retry' : 'resume'}">${icon('i-play')}${t.status === 'error' ? '重试' : '继续'}</button>`;
-    if (t.status === 'completed') acts += `<button class="primary-btn" data-act="open">${icon('i-external')}打开文件</button>`;
-    if (t.finalPath || t.dir) acts += `<button class="ghost-btn" data-act="reveal">${icon('i-folder')}所在文件夹</button>`;
+      const hashBlock = t.sha256 ? `
+        <div class="detail-block"><span>SHA-256</span>
+          <div class="copy-row"><code>${esc(t.sha256)}</code>
+          <button class="icon-btn" data-copy="${esc(t.sha256)}" aria-label="复制 SHA-256">${icon('i-copy')}</button></div>
+        </div>` : '';
 
-    $('#drawerTitle').textContent = st.text + ' · 详情';
-    $('#drawerBody').innerHTML = `
-      <div class="detail-name">${esc(t.name || '未命名任务')}</div>
-      ${errBlock}${warnBlock}${verifyBlock}
-      <div class="detail-progress">
-        <div class="progress"><i style="width:${t.size ? pct(t).toFixed(2) + '%' : '100%'}"></i></div>
-        <div class="task-bottom"><span class="live">${t.status === 'downloading' ? fmtSpeed(t.speed) : st.text}</span>
-        <span>${t.size ? fmtSize(t.done) + ' / ' + fmtSize(t.size) : fmtSize(t.done)}</span></div>
-      </div>
-      <div class="detail-actions">${acts}</div>
-      <div class="detail-grid">${grid}</div>
-      ${segGrid}
-      <div class="detail-block"><span>下载地址</span>
-        <div class="copy-row"><code>${esc(t.url || '—')}</code>
-        <button class="icon-btn" data-copy="${esc(t.url || '')}" aria-label="复制链接">${icon('i-copy')}</button></div>
-      </div>
-      <div class="detail-block"><span>保存位置</span>
-        <div class="copy-row"><code>${esc(t.finalPath || t.dir || '—')}</code>
-        <button class="icon-btn" data-copy="${esc(t.finalPath || t.dir || '')}" aria-label="复制路径">${icon('i-copy')}</button></div>
-      </div>
-      ${hashBlock}${sigBlock}`;
+      const sigState = t.signature === 'verified' ? '已验证'
+        : t.signature === 'failed' ? '校验失败'
+          : t.signature === 'unsupported' ? '未验证' : '未验证';
+      const sigBlock = (t.signer || t.signatureDetail) ? `
+        <div class="detail-block"><span>APK 签名（${esc(t.scheme || '未知方案')}）· ${sigState}</span>
+          ${t.signer ? `<div class="copy-row"><code>${esc(t.signer)}</code>
+          <button class="icon-btn" data-copy="${esc(t.signer)}" aria-label="复制证书指纹">${icon('i-copy')}</button></div>` : ''}
+          ${t.signerSubject ? `<code>${esc(t.signerSubject)}</code>` : ''}
+          ${t.signatureDetail ? `<code>${esc(t.signatureDetail)}</code>` : ''}
+        </div>` : '';
 
-    $$('[data-copy]', $('#drawerBody')).forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(btn.dataset.copy);
-          toast('已复制', 'good');
-        } catch (e) {
-          toast('复制失败，请手动选择', 'bad');
-        }
+      const errBlock = t.status === 'error' && t.error ? `<div class="error-box">${esc(t.error)}</div>` : '';
+      const warnBlock = t.warning ? `<div class="warning-box">${esc(t.warning)}</div>` : '';
+      const verifyBlock = t.verify === 'mismatch'
+        ? `<div class="error-box">哈希与期望值不一致，文件${t.finalPath ? '已隔离到：' + esc(t.finalPath) : '未通过校验'}</div>` : '';
+
+      let acts = '';
+      if (t.status === 'downloading' || t.status === 'queued') acts += `<button class="ghost-btn" data-act="pause">${icon('i-pause')}暂停</button>`;
+      if (t.status === 'paused' || t.status === 'error') acts += `<button class="primary-btn" data-act="${t.status === 'error' ? 'retry' : 'resume'}">${icon('i-play')}${t.status === 'error' ? '重试' : '继续'}</button>`;
+      if (t.status === 'completed') acts += `<button class="primary-btn" data-act="open">${icon('i-external')}打开文件</button>`;
+      if (t.finalPath || t.dir) acts += `<button class="ghost-btn" data-act="reveal">${icon('i-folder')}所在文件夹</button>`;
+
+      $('#drawerTitle').textContent = st.text + ' · 详情';
+      $('#drawerBody').innerHTML = `
+        <div class="detail-name">${esc(t.name || '未命名任务')}</div>
+        ${errBlock}${warnBlock}${verifyBlock}
+        <div class="detail-progress">
+          <div class="progress"><i style="width:${t.size ? pct(t).toFixed(2) + '%' : '100%'}"></i></div>
+          <div class="task-bottom"><span class="live">${t.status === 'downloading' ? fmtSpeed(t.speed) : st.text}</span>
+          <span class="done">${t.size ? fmtSize(t.done) + ' / ' + fmtSize(t.size) : fmtSize(t.done)}</span></div>
+        </div>
+        <div class="detail-actions">${acts}</div>
+        <div class="detail-grid">${grid}</div>
+        ${segGrid}
+        <div class="detail-block"><span>下载地址</span>
+          <div class="copy-row"><code>${esc(t.url || '—')}</code>
+          <button class="icon-btn" data-copy="${esc(t.url || '')}" aria-label="复制链接">${icon('i-copy')}</button></div>
+        </div>
+        <div class="detail-block"><span>保存位置</span>
+          <div class="copy-row"><code>${esc(t.finalPath || t.dir || '—')}</code>
+          <button class="icon-btn" data-copy="${esc(t.finalPath || t.dir || '')}" aria-label="复制路径">${icon('i-copy')}</button></div>
+        </div>
+        ${hashBlock}${sigBlock}`;
+
+      $$('[data-copy]', $('#drawerBody')).forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(btn.dataset.copy);
+            toast('已复制', 'good');
+          } catch (e) {
+            toast('复制失败，请手动选择', 'bad');
+          }
+        });
       });
-    });
-    $$('[data-act]', $('#drawerBody')).forEach((btn) => {
-      btn.addEventListener('click', () => doAction(btn.dataset.act, t.id, btn));
-    });
+      $$('[data-act]', $('#drawerBody')).forEach((btn) => {
+        btn.addEventListener('click', () => doAction(btn.dataset.act, t.id, btn));
+      });
+
+      state.drawerRefs = {
+        bar: $('#drawerBody .detail-progress .progress > i'),
+        live: $('#drawerBody .detail-progress .live'),
+        done: $('#drawerBody .detail-progress .done'),
+        segs: $$('#drawerBody .seg-grid i')
+      };
+    }
+
+    const refs = state.drawerRefs || {};
+    if (refs.bar) refs.bar.style.width = t.size ? pct(t).toFixed(2) + '%' : '100%';
+    if (refs.live) refs.live.textContent = t.status === 'downloading' ? fmtSpeed(t.speed) : st.text;
+    if (refs.done) refs.done.textContent = t.size ? fmtSize(t.done) + ' / ' + fmtSize(t.size) : fmtSize(t.done);
+    if (refs.segs && refs.segs.length) {
+      segs.forEach((s, i) => {
+        const el = refs.segs[i];
+        if (!el) return;
+        const q = s.end >= s.start ? Math.min(100, (s.done / (s.end - s.start + 1)) * 100) : 0;
+        el.style.setProperty('--p', q.toFixed(1) + '%');
+        el.title = q.toFixed(1) + '%';
+      });
+    }
   }
 
   // ---------------------------------------------------------------- 视图切换
 
   function setView(view) {
     state.view = view;
+    state.limit = 60;
     const isSettings = view === 'settings';
     $('#viewDownloads').hidden = isSettings;
     $('#viewSettings').hidden = !isSettings;
@@ -815,14 +898,23 @@
     $$('.seg-filter button').forEach((el) => {
       el.addEventListener('click', () => {
         state.filter = el.dataset.filter;
+        state.limit = 60;
         $$('.seg-filter button').forEach((b) => b.classList.toggle('is-active', b === el));
         renderList();
       });
     });
     $('#searchInput').addEventListener('input', (e) => {
       state.search = e.target.value;
+      state.limit = 60;
       renderList();
     });
+    const more = $('#listMore');
+    if (more) {
+      more.addEventListener('click', () => {
+        state.limit += 120;
+        renderList();
+      });
+    }
     $('#newTaskBtn').addEventListener('click', openNew);
     $('#emptyNewBtn').addEventListener('click', openNew);
     $('#fabBtn').addEventListener('click', openNew);

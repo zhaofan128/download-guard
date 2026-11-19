@@ -490,6 +490,22 @@ button { cursor: pointer; border: none; background: none; }
 
 .task-list { display: flex; flex-direction: column; gap: 10px; }
 
+/* 列表分页：默认只渲染 60 条，避免上千个节点拖垮低配机器的滚动与样式重算 */
+.list-more {
+  display: block;
+  width: 100%;
+  margin: 12px 0 4px;
+  padding: 11px 14px;
+  border-radius: 14px;
+  border: 1px dashed var(--line-strong, rgba(148, 163, 184, 0.35));
+  background: transparent;
+  color: var(--text-dim, #94a3b8);
+  font-size: 13px;
+  cursor: pointer;
+}
+.list-more:hover { color: var(--text, #e2e8f0); border-color: var(--accent, #7c6bff); }
+.list-more[hidden] { display: none; }
+
 .task {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto;

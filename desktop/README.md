@@ -1,6 +1,6 @@
 # DownloadGuard Desktop
 
-与 Android 版功能对等、代码各自独立的电脑版。**一个 jar + 三条启动脚本，Windows / macOS / Linux 通用**，不装运行时补丁、不写注册表、不依赖 Electron。
+与 Android 版功能对等、代码各自独立的电脑版。**Windows 是双击就用的 exe（内置运行时），macOS / Linux 是 jar + 启动脚本**，不写注册表、不依赖 Electron。
 
 界面是本地起的网页（只监听 `127.0.0.1`），用系统自带浏览器渲染，所以：
 
@@ -8,15 +8,22 @@
 - 手机、平板连同一个 WiFi 就能打开同一套界面（`--lan`），**一份 UI 同时适配电脑和手机**；
 - 升级只换一个 jar，不用卸载重装。
 
-桌面版与 Android 版功能对等但不共享代码（版本号通常同步，`3.4.1` 是例外：只修桌面版）：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
+桌面版与 Android 版功能对等但不共享代码（版本号各自独立，桌面版修 bug 不必重发 APK；当前桌面版 `3.4.2`）：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
 
 ---
 
 ## 一、怎么跑起来
 
-### 前提：Java 8 或更高
+### Windows：不需要装 Java
 
-Windows 上大量机器只装了 JRE 8，所以 jar 按 **Java 8 字节码**编译，8 / 11 / 17 / 21 都能直接跑。
+下 `DownloadGuard-Desktop-<版本>-win64.zip`，解压，双击 `DownloadGuard.exe`。
+`runtime\` 里就是完整的 64 位 Java 8，`app\` 里是程序本体，两个目录都不要删。
+
+启动后没有控制台窗口，托盘区会出现盾牌图标：右键可以「打开下载界面」或「退出（保存断点）」，双击图标直接打开界面。
+
+### macOS / Linux：Java 8 或更高
+
+jar 按 **Java 8 字节码**编译（Windows 上大量机器只装了 JRE 8），8 / 11 / 17 / 21 都能直接跑。
 
 ```bash
 java -version
@@ -239,10 +246,15 @@ HTTP 缓存或 Service Worker 可能在作怪。强制刷新：`Ctrl/Cmd + Shift
 ## 七、测试
 
 ```bash
-./build.sh                                   # 编译
-java -Ddg.apk=test/fixtures/signed.apk -jar ../dist/DownloadGuard-Desktop-3.2.0.jar --selftest   # 54 项自检，含真实 APK 验签
-python3 test/e2e.py                          # 99 项端到端检查（起真服务器、真下载、真杀进程）
+./build.sh                                                     # 编译
+java -jar ../dist/DownloadGuard-Desktop-3.4.2.jar --selftest   # 66 项自检
+python3 test/e2e.py ../dist/DownloadGuard-Desktop-3.4.2.jar    # 100 项端到端（起真服务器、真下载、真杀进程）
+
+# 打两个发布包（Windows 免安装 exe + 跨平台 jar 包）
+JRE_ZIP=~/.cache/dlguard/jre8-win64.zip L4J_DIR=/opt/launch4j ./build-release.sh
 ```
+
+`build-windows.sh` 用 Launch4j 在 Linux 上直接产出真正的 PE 可执行文件（不是自解压壳），并把 64 位 JRE 8 一起打进去。它需要两样只在构建机上用的东西，脚本开头写了下载地址：Windows 版 JRE 8 的 zip、Launch4j 3.50。
 
 `test/e2e.py` 覆盖的是单测够不着的那类问题：
 

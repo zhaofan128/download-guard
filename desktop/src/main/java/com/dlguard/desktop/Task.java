@@ -82,7 +82,29 @@ public final class Task {
         return "downloading".equals(status) || "verifying".equals(status) || "queued".equals(status);
     }
 
+    /**
+     * 状态流用的变更指纹：只有指纹变了才把这条任务推给浏览器。
+     * 300 个任务每 0.9 秒全量重发是旧版卡顿的根源，这里把「谁变了」算在服务端。
+     */
+    public String sig() {
+        StringBuilder sb = new StringBuilder(96);
+        sb.append(status).append('|').append(done).append('|').append(totalDone())
+                .append('|').append(size).append('|').append(speed).append('|').append(eta)
+                .append('|').append(stage).append('|').append(error).append('|').append(verify)
+                .append('|').append(signature).append('|').append(name).append('|')
+                .append(finishedAt).append('|').append(connections).append('|').append(warning);
+        return sb.toString();
+    }
+
     public Map<String, Object> toMap() {
+        return toMap(true);
+    }
+
+    /**
+     * @param withSegments 分段明细只在首次加载和打开详情时用得上。状态流每 0.9 秒推一次，
+     *                     300 个任务带 2400 个分段对象就有 200 KB+，是界面发卡的主因。
+     */
+    public Map<String, Object> toMap(boolean withSegments) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", id);
         m.put("url", url);
@@ -120,7 +142,7 @@ public final class Task {
         m.put("source", source);
         // cookie 故意不序列化：它等价于登录态，写进 tasks.json 就是明文落盘
         m.put("hasCookie", cookie != null && !cookie.isEmpty());
-        m.put("segments", segsToMaps());
+        if (withSegments) m.put("segments", segsToMaps());
         return m;
     }
 

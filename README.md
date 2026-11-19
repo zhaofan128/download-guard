@@ -53,7 +53,7 @@
 | HarmonyOS 4.x 及更早 | ✅ | 浏览器 | 系统仍兼容 AOSP，直接装 `arm64` 包 |
 | HarmonyOS NEXT（5.0+，纯血鸿蒙） | ❌ | 浏览器 | 已移除 Android 兼容层，APK 装不上；用华为浏览器开电脑版 |
 | iOS / iPadOS 14+ | ❌ | 浏览器 | 不允许侧载，也没有 JVM；Safari 开电脑版后可「添加到主屏幕」 |
-| Windows 10/11 | — | ✅ | 双击 `start-windows.bat` |
+| Windows 10/11 | — | ✅ | 双击 `DownloadGuard.exe`，免安装、不用装 Java |
 | macOS 10.15+ | — | ✅ | 双击 `start-macos.command` |
 | Linux（x86_64 / arm64） | — | ✅ | `./start-linux.sh` |
 | Chrome OS | ✅ | 浏览器 | 支持装 Android 应用 |
@@ -85,19 +85,21 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 **[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
 
-3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号通常同步。唯一的例外是 `3.4.1`：只修桌面版，Android 包仍是 `3.4.0`，不用重装。
+3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等。版本号各自独立：桌面版修 bug 不必重发 APK。当前桌面版 `3.4.2`，Android 版 `3.4.0`。
 
 ### 电脑版（Windows / macOS / Linux）
 
-下载 [`DownloadGuard-Desktop-3.4.1.zip`](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.1)，解压后双击对应脚本（需要 **Java 8 或更高**，不用装 Android SDK、不用编译）：
+**Windows 直接下这个**：[`DownloadGuard-Desktop-3.4.2-win64.zip`](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.2)，解压后双击 `DownloadGuard.exe`。**不用装 Java**，包里已经带了 64 位 Java 8 运行时；启动不弹黑窗口，托盘里有盾牌图标，右键可以「打开下载界面」或「退出（保存断点）」。
+
+macOS / Linux 或想用 jar 的，下 [`DownloadGuard-Desktop-3.4.2.zip`](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.2)，需要 **Java 8 或更高**：
 
 | 系统 | 启动方式 |
 | --- | --- |
-| Windows | 双击 `start-windows.bat` |
+| Windows | 双击 `DownloadGuard.exe`（免安装包）或 `start-windows.bat`（jar 包） |
 | macOS | 双击 `start-macos.command` |
 | Linux | 终端执行 `./start-linux.sh` |
 
-启动后自动打开浏览器；关掉浏览器不会中断下载，回到终端按 `Ctrl + C` 才退出（会先保存断点）。
+启动后自动打开浏览器；关掉浏览器不会中断下载，托盘退出或终端 `Ctrl + C` 才退出（会先保存断点）。
 
 想让手机、平板用同一套界面：
 
@@ -172,7 +174,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.3.0.jar
 - 状态推送用 SSE，断线自动重连并有轮询兜底；所有分段进度落盘，进程被杀也能续。
 - 不点界面也能用：`--add <链接> --wait` 投递并等结果，`--status` 看队列，脚本和 CI 不用模拟浏览器点击。
 - **浏览器接管**：设置页下载内置扩展（zip 已打进 jar），加载到 Chrome/Edge 后填一次 8 位配对码。之后网盘网页里点「下载」，扩展会取消浏览器下载，把链接连同 **Referer、登录 Cookie、UA** 一起投递过来——这三样缺一个，网盘直链就是 403 或登录页。扩展自动扫描 **8765–8794**（桌面版默认端口与顺延窗口），用 `--port` 改了端口可在弹窗手动填。接管开关**默认关**，配对后弹窗确认才开启，并支持按站点跳过。扩展只碰「浏览器自己要下的那个文件」，不做资源嗅探、不读页面内容；投递失败会自动把下载还给浏览器，并让该站点冷却 5 分钟。详见 [browser-extension/README.md](browser-extension/README.md)。
-- 纯 Java 8、零第三方依赖：jar 约 218 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
+- 纯 Java 8、零第三方依赖：jar 约 224 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
 
 | 能力 | 电脑版 | Android 版 |
 | --- | --- | --- |
