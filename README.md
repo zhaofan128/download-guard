@@ -17,7 +17,7 @@
 - Kotlin + Coroutines + Jetpack Compose（Material 3）
 - 最低 Android 8.0（API 26），compileSdk / targetSdk 34
 - 无需 root；Shizuku、LSPosed 均为**可选**增强，不装不影响任何核心功能
-- 电脑版：纯 Java 11 实现，**零第三方依赖**，一个 106 KB 的 jar；界面用系统浏览器渲染，手机/平板连同一 WiFi 也能打开（`--lan`，带随机令牌）
+- 电脑版：纯 Java 8 实现，**零第三方依赖**，一个 218 KB 的 jar；界面用系统浏览器渲染，手机/平板连同一 WiFi 也能打开（`--lan`，带随机令牌）
 - **212 个 JVM 单元测试、33 个测试类**（`full` 变体；`store` 变体 200 个，少的是随源集移出的 12 个），**CI 强制零跳过**：CI 先构建 Debug 包给验签用例当样本，测试跑完直接读 JUnit XML，`skipped > 0` 就判红。本地没构建过 APK 时验签用例会自动跳过，这是 JVM 单测的固有限制——所以「零跳过」只在 CI 上成立，README 不再含糊成「本地也是」
 - 覆盖范围：分块调度器的并发一致性、测速决策、哈希基准解析、网络层嗅探判定、全局熔断阶梯、旁挂哈希解析、脚本沙箱逃逸面、HLS 播放列表与 AES-128 分片、磁力链接解析、BT 状态映射与限速展示、真实 APK 的 v2 签名摘要重算
 
@@ -85,11 +85,11 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 **[⬇ 下载最新版](https://github.com/zhaofan128/download-guard/releases/latest)**
 
-3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号同步。
+3.0.0 起同时提供 **电脑版** 与 **Android 版**，能力对等、版本号通常同步。唯一的例外是 `3.4.1`：只修桌面版，Android 包仍是 `3.4.0`，不用重装。
 
 ### 电脑版（Windows / macOS / Linux）
 
-下载 `DownloadGuard-Desktop-3.2.0.zip`，解压后双击对应脚本（需要 Java 11+，不用装 Android SDK、不用编译）：
+下载 `DownloadGuard-Desktop-3.4.1.zip`，解压后双击对应脚本（需要 **Java 8 或更高**，不用装 Android SDK、不用编译）：
 
 | 系统 | 启动方式 |
 | --- | --- |
@@ -145,7 +145,7 @@ sha256sum -c CHECKSUMS.txt        # macOS: shasum -a 256 -c CHECKSUMS.txt
 
 同一版本号的资产一旦发布就不再替换；任何二进制变化都会发新的修订号。历史版本 `2.2.0` 曾在同版本号下替换过 APK，这是错误的，不能作为可复现基准——如果你记录过当时的哈希，请以对应 commit 的构建产物为准，不要拿它校验后来的 `2.2.0` 文件。
 
-桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。**实测 JDK 17 与 JDK 21 构建哈希一致；JDK 25 构建哈希不同**——「Java 11+ 都能跑」不等于「哪个 JDK 构建都一样」，要复现 Release 里的哈希请用 **JDK 17 或 21** 构建。你可以自己从 tag 构建一遍再核对：
+桌面版 jar 是**可复现构建**：同一份源码打出来的字节完全一致（`desktop/build.sh` 把条目 mtime 钉死为 2000-01-01、manifest 自己写、条目按字典序排列；CI 每次都会连打两次比对哈希）。**实测 JDK 17 与 JDK 21 构建哈希一致；JDK 25 构建哈希不同**——「Java 8+ 都能跑」不等于「哪个 JDK 构建都一样」，要复现 Release 里的哈希请用 **JDK 17 或 21** 构建。你可以自己从 tag 构建一遍再核对：
 
 ```bash
 git checkout v3.3.0 && cd desktop && ./build.sh
@@ -172,7 +172,7 @@ sha256sum ../dist/DownloadGuard-Desktop-3.3.0.jar
 - 状态推送用 SSE，断线自动重连并有轮询兜底；所有分段进度落盘，进程被杀也能续。
 - 不点界面也能用：`--add <链接> --wait` 投递并等结果，`--status` 看队列，脚本和 CI 不用模拟浏览器点击。
 - **浏览器接管**：设置页下载内置扩展（zip 已打进 jar），加载到 Chrome/Edge 后填一次 8 位配对码。之后网盘网页里点「下载」，扩展会取消浏览器下载，把链接连同 **Referer、登录 Cookie、UA** 一起投递过来——这三样缺一个，网盘直链就是 403 或登录页。扩展自动扫描 **8765–8794**（桌面版默认端口与顺延窗口），用 `--port` 改了端口可在弹窗手动填。接管开关**默认关**，配对后弹窗确认才开启，并支持按站点跳过。扩展只碰「浏览器自己要下的那个文件」，不做资源嗅探、不读页面内容；投递失败会自动把下载还给浏览器，并让该站点冷却 5 分钟。详见 [browser-extension/README.md](browser-extension/README.md)。
-- 纯 Java 11、零第三方依赖：jar 约 190 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
+- 纯 Java 8、零第三方依赖：jar 约 218 KB（含四套图标），没有 npm、没有 node_modules、没有运行时补丁。
 
 | 能力 | 电脑版 | Android 版 |
 | --- | --- | --- |
@@ -424,7 +424,7 @@ DownloadGuard/
 │   ├── ui/          Compose 界面、嗅探页、液态玻璃组件
 │   └── work/        WorkManager 兜底任务
 ├── app/src/test/    212 个 JVM 单元测试（33 个测试类）
-├── desktop/         电脑版：纯 Java 11，零依赖，自带 HTTP 服务与响应式 Web UI
+├── desktop/         电脑版：纯 Java 8，零依赖，自带 HTTP 服务与响应式 Web UI
 │   ├── src/main/java/com/dlguard/desktop/
 │   │   ├── Engine.java      分段下载、断点续传、队列、全局限速
 │   │   ├── Hls.java         m3u8 解析、AES-128、分片拼接、ffmpeg 封装

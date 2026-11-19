@@ -15,6 +15,15 @@ import java.util.List;
 public final class Main {
 
     public static void main(String[] args) {
+        try {
+            run(args);
+        } catch (Throwable t) {
+            // 双击启动时没有控制台，不接住就只剩一句 "A Java Exception has occurred"
+            Crash.report(t, args);
+        }
+    }
+
+    private static void run(String[] args) {
         int port = 0;
         boolean lan = false;
         boolean openBrowser = true;

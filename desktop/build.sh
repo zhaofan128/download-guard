@@ -15,9 +15,11 @@ JAR="$DIST/DownloadGuard-Desktop-$VERSION.jar"
 rm -rf "$CLASSES"
 mkdir -p "$CLASSES" "$DIST"
 
-# --release 11：兼容 Windows 7/10/11、macOS 10.15+、主流 Linux 发行版上的 JRE 11+
+# --release 8：Windows 上仍有大量机器只装了 JRE 8，而 11 的字节码在 8 上直接
+# UnsupportedClassVersionError，双击 jar 只会弹一句「A Java Exception has occurred」。
+# 代码里因此不能用 ProcessHandle / Redirect.DISCARD 这类 Java 9+ API。
 find src/main/java -name '*.java' > "$OUT/sources.txt"
-javac --release 11 -encoding UTF-8 -Xlint:all -d "$CLASSES" @"$OUT/sources.txt"
+javac --release 8 -encoding UTF-8 -Xlint:all -Xlint:-options -d "$CLASSES" @"$OUT/sources.txt"
 
 cp -R src/main/resources/. "$CLASSES/"
 

@@ -77,7 +77,7 @@ public final class Store {
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("port=").append(port).append('\n');
-            sb.append("pid=").append(ProcessHandle.current().pid()).append('\n');
+            sb.append("pid=").append(Util.currentPid()).append('\n');
             if (token != null && !token.isEmpty()) sb.append("token=").append(token).append('\n');
             // 注意：不能写 lockFile —— 原子替换会换掉 inode，锁就失效了
             Util.atomicWrite(infoFile, sb.toString().getBytes(StandardCharsets.UTF_8));

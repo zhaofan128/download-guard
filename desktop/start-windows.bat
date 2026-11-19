@@ -21,15 +21,19 @@ if not defined JAR (
 where java >nul 2>nul
 if errorlevel 1 (
   echo.
-  echo   [需要 Java] 没有找到 java，请先安装 Java 11 或更高版本：
+  echo   [需要 Java] 没有找到 java，请先安装 Java 8 或更高版本：
   echo               https://adoptium.net/
   echo.
   pause
   exit /b 1
 )
 
+rem 把 Java 版本打出来：出问题时这一行往往就能说明原因
+for /f "delims=" %%v in ('java -version 2^>^&1 ^| findstr /i "version"') do set "JAVAVER=%%v"
+
 echo.
 echo   正在启动 %JAR%
+echo   运行环境 %JAVAVER%
 echo   浏览器会自动打开；关闭本窗口或按 Ctrl+C 退出。
 echo.
 java -jar "%JAR%" %*

@@ -30,6 +30,24 @@ public final class Util {
     private static final Pattern RESERVED =
             Pattern.compile("^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\\..*)?$", Pattern.CASE_INSENSITIVE);
 
+    /**
+     * 当前进程 PID。
+     *
+     * 不用 ProcessHandle：那是 Java 9 才有的 API，用了整个 jar 就只能跑在 11+ 上，
+     * 而 Windows 上大量机器装的还是 JRE 8。RuntimeMXBean 的 "pid@host" 在 HotSpot 上
+     * 从 Java 6 就有，取值失败时返回 -1，调用方按「拿不到」处理即可。
+     */
+    public static long currentPid() {
+        try {
+            String name = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
+            int at = name.indexOf('@');
+            if (at > 0) return Long.parseLong(name.substring(0, at));
+        } catch (Throwable ignored) {
+            // 被裁剪过的 JRE 可能没有 java.management，退回 -1
+        }
+        return -1L;
+    }
+
     public static String sanitizeName(String raw, String fallback) {
         String name = raw == null ? "" : raw.trim();
         if (name.isEmpty()) name = fallback;

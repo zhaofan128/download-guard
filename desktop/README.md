@@ -8,17 +8,21 @@
 - 手机、平板连同一个 WiFi 就能打开同一套界面（`--lan`），**一份 UI 同时适配电脑和手机**；
 - 升级只换一个 jar，不用卸载重装。
 
-桌面版 3.2.0 与 Android 3.2.0 同版本号，功能对等但不共享代码：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
+桌面版与 Android 版功能对等但不共享代码（版本号通常同步，`3.4.1` 是例外：只修桌面版）：Android 端的 Shizuku、无障碍接管、通知栏这些系统能力在电脑上没有对应物，桌面端换成了文件夹监控式的工作流 + 浏览器直连。
 
 ---
 
 ## 一、怎么跑起来
 
-### 前提：Java 11 或更高
+### 前提：Java 8 或更高
+
+Windows 上大量机器只装了 JRE 8，所以 jar 按 **Java 8 字节码**编译，8 / 11 / 17 / 21 都能直接跑。
 
 ```bash
 java -version
 ```
+
+如果双击 jar 弹的是「A Java Exception has occurred.」，先看 `%USERPROFILE%\.dlguard-desktop\crash-*.log`（macOS / Linux 是 `~/.dlguard-desktop/`），里面写了 Java 版本和完整堆栈。
 
 没有的话：
 
@@ -257,8 +261,8 @@ CI 里和编译、自检、启动烟雾测试一起跑，失败即红。
 
 ## 八、实现取舍
 
-- **零第三方依赖**：只用 JDK 自带的 `com.sun.net.httpserver`、`HttpURLConnection`、`ZipFile`、`Cipher`。jar 约 190 KB（含图标），不会因为依赖漏洞被迫升级。
-- **Java 11 字节码**：`--release 11`，Windows 7 + JRE 11 也能跑；没有用 record / 密封类这些新语法。
+- **零第三方依赖**：只用 JDK 自带的 `com.sun.net.httpserver`、`HttpURLConnection`、`ZipFile`、`Cipher`。jar 约 218 KB（含图标），不会因为依赖漏洞被迫升级。
+- **Java 8 字节码**：`--release 8`，Windows 7 + JRE 8 也能跑；因此不能用 `ProcessHandle`、`Redirect.DISCARD` 这类 Java 9+ API，需要进程号时走 `RuntimeMXBean`。
 - **前端零构建**：一个 `index.html` + `app.css` + `app.js`，没有 npm、没有打包器，改一行刷新就生效。
 - **状态推送用 SSE**：比轮询省电，比 WebSocket 简单；断线自动重连，另有 1.5 秒轮询兜底。
 - **安全默认**：只监听 `127.0.0.1`；**本机模式也强制令牌**（32 字节 SecureRandom、Base64URL），首页设置 HttpOnly Cookie，状态变更还要 `X-DG-Token` 双提交；静态资源和接口走同一套鉴权。

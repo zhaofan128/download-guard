@@ -1,6 +1,7 @@
 package com.dlguard.desktop;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -266,10 +267,14 @@ public final class Torrent {
                     "--bt-save-metadata=true",
                     "--summary-interval=0",
                     "--console-log-level=warn",
-                    "--stop-with-process=" + ProcessHandle.current().pid()
+                    "--stop-with-process=" + Util.currentPid()
             );
             pb.redirectErrorStream(true);
-            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            // 等价于 Java 9 的 Redirect.DISCARD，但 Java 8 也能用。
+            // 顺手把 aria2 的 stderr 收进临时文件：启动失败时能把原因打出来。
+            File ariaLog = File.createTempFile("dlguard-aria2-", ".log");
+            ariaLog.deleteOnExit();
+            pb.redirectOutput(ariaLog);
             process = pb.start();
             // 等 RPC 起来，最多 8 秒
             for (int i = 0; i < 40; i++) {
