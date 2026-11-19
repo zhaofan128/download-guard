@@ -89,7 +89,7 @@ http://192.168.1.5:8765/?token=8f3c2a...
 
 ### 电脑版（Windows / macOS / Linux）
 
-下载 `DownloadGuard-Desktop-3.4.1.zip`，解压后双击对应脚本（需要 **Java 8 或更高**，不用装 Android SDK、不用编译）：
+下载 [`DownloadGuard-Desktop-3.4.1.zip`](https://github.com/zhaofan128/download-guard/releases/tag/v3.4.1)，解压后双击对应脚本（需要 **Java 8 或更高**，不用装 Android SDK、不用编译）：
 
 | 系统 | 启动方式 |
 | --- | --- |
