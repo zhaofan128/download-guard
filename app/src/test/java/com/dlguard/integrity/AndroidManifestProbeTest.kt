@@ -5,7 +5,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assume.assumeTrue
 import org.junit.Test
 import java.io.File
 import java.util.zip.ZipEntry
@@ -14,33 +13,34 @@ import java.util.zip.ZipOutputStream
 /**
  * AndroidManifestProbe 的回归测试。
  *
- * 真实 APK 用仓库 dist/ 里已发布的包做样本（存在才跑），
- * 这样 AXML 的字符串池、资源映射、UTF-8/UTF-16 两种编码都被真实数据覆盖过，
- * 而不是只对着自己造的样例自说自话。
+ * 样本优先用构建产物（CI 会先 assembleFullDebug），其次用 dist/ 里已发布的包。
+ * 这里**不使用 assumeTrue**：CI 的「零跳过」守卫会把跳过算成失败，
+ * 而且样本缺失本来就该被看见，不该静默略过。
  */
 class AndroidManifestProbeTest {
 
-    private fun sampleApk(): File? {
+    private fun sampleApk(): File {
         val candidates = listOf(
-            File("../dist/DownloadGuard-3.4.0-arm64.apk"),
-            File("dist/DownloadGuard-3.4.0-arm64.apk"),
-            File("../dist/DownloadGuard-3.4.0-universal.apk")
+            File("../app/build/outputs/apk/full/debug/app-full-debug.apk"),
+            File("app/build/outputs/apk/full/debug/app-full-debug.apk"),
+            File("../dist/DownloadGuard-3.4.3-arm64.apk"),
+            File("../dist/DownloadGuard-3.4.0-arm64.apk")
         )
         return candidates.firstOrNull { it.exists() && it.length() > 0 }
+            ?: error("找不到可用的 APK 样本：先跑 ./gradlew :app:assembleFullDebug")
     }
 
     @Test
     fun `真实 APK 能读出 package 与 sdk 版本`() {
-        val apk = sampleApk()
-        assumeTrue("dist 下没有样本 APK，跳过真实包用例", apk != null)
-        val info = AndroidManifestProbe.inspect(apk!!)
+        val info = AndroidManifestProbe.inspect(sampleApk())
 
         assertNull("解析不应报错：${info.error}", info.error)
         assertTrue("manifest 应可解析", info.parsed)
         assertEquals("com.dlguard", info.packageName)
+        // minSdk / targetSdk 由 build.gradle.kts 固定，版本号会随发版变化，不做硬断言
         assertEquals(26, info.minSdk)
         assertEquals(34, info.targetSdk)
-        assertEquals(36L, info.versionCode)
+        assertTrue("versionCode 应为正数", (info.versionCode ?: 0) > 0)
     }
 
     @Test
@@ -86,10 +86,8 @@ class AndroidManifestProbeTest {
 
     @Test
     fun `截断的 manifest 不会崩溃`() {
-        val apk = sampleApk()
-        assumeTrue(apk != null)
         // 取真实 manifest 的前 200 字节，模拟传输中断
-        val truncated = java.util.zip.ZipFile(apk!!).use { zip ->
+        val truncated = java.util.zip.ZipFile(sampleApk()).use { zip ->
             zip.getInputStream(zip.getEntry("AndroidManifest.xml")).use { input ->
                 val buffer = ByteArray(200)
                 var total = 0
