@@ -42,14 +42,21 @@ class GuardRepository(
         result: IntegrityResult,
         file: File,
         source: ResolvedSource,
-        quarantinedPath: String?
+        quarantinedPath: String?,
+        /**
+         * 记录里展示的路径与文件名。默认取实际文件；
+         * 校验失败时文件已被移进隔离区，但用户需要看到的是「我下到哪了」，
+         * 所以调用方可以显式传原始目标路径。
+         */
+        displayPath: String = file.absolutePath,
+        displayName: String = file.name
     ): Long = withContext(Dispatchers.IO) {
         // 覆盖同名文件后，旧记录指向同一路径：先清掉，避免「最近校验」出现两条一模一样的条目
-        runCatching { recordDao.deleteByPath(file.absolutePath) }
+        runCatching { recordDao.deleteByPath(displayPath) }
         recordDao.insert(
             CheckRecord(
-                filePath = file.absolutePath,
-                fileName = file.name,
+                filePath = displayPath,
+                fileName = displayName,
                 sizeBytes = result.sizeBytes,
                 verdict = result.verdict.name,
                 detail = result.detail,

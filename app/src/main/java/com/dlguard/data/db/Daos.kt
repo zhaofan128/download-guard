@@ -21,13 +21,13 @@ interface CheckRecordDao {
     @Query("SELECT COUNT(*) FROM check_records")
     fun observeTotal(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED')")
+    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED','BLOCKED')")
     fun observeBroken(): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM check_records")
     suspend fun totalCount(): Int
 
-    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED')")
+    @Query("SELECT COUNT(*) FROM check_records WHERE verdict NOT IN ('OK','TRUSTED','BLOCKED')")
     suspend fun brokenCount(): Int
 
     @Query("SELECT * FROM check_records WHERE id = :id LIMIT 1")

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -56,6 +57,7 @@ import com.dlguard.integrity.FileHasher
 import kotlinx.coroutines.launch
 import com.dlguard.core.Formatters
 import com.dlguard.data.db.CheckRecord
+import com.dlguard.integrity.Tone
 import com.dlguard.integrity.Verdict
 import com.dlguard.ui.MainViewModel
 import com.dlguard.ui.components.EmptyState
@@ -70,6 +72,7 @@ import com.dlguard.ui.theme.LocalMotionEnabled
 import com.dlguard.ui.theme.Spacing
 import com.dlguard.ui.theme.Success
 import com.dlguard.ui.theme.Teal300
+import com.dlguard.ui.theme.Warning
 
 @Composable
 fun RecordsScreen(viewModel: MainViewModel, bottomInset: Dp) {
@@ -190,6 +193,18 @@ private fun RecordDetailCard(
 ) {
     val motionEnabled = LocalMotionEnabled.current
     val verdict = runCatching { Verdict.valueOf(record.verdict) }.getOrNull()
+    // 三档：绿=完好，黄=文件没坏但系统拒装，红=真损坏
+    val tone = verdict?.tone ?: if (record.healthy) Tone.OK else Tone.BAD
+    val accent = when (tone) {
+        Tone.OK -> Success
+        Tone.WARN -> Warning
+        Tone.BAD -> Danger
+    }
+    val statusIcon = when (tone) {
+        Tone.OK -> Icons.Filled.Check
+        Tone.WARN -> Icons.Filled.Warning
+        Tone.BAD -> Icons.Filled.Close
+    }
     var visible by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(record.id) {
         kotlinx.coroutines.delay(index.coerceAtMost(12) * 40L)
@@ -211,15 +226,15 @@ private fun RecordDetailCard(
                 Modifier
                     .size(36.dp)
                     .background(
-                        if (record.healthy) Success.copy(alpha = 0.16f) else Danger.copy(alpha = 0.16f),
+                        accent.copy(alpha = 0.16f),
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (record.healthy) Icons.Filled.Check else Icons.Filled.Close,
+                    imageVector = statusIcon,
                     contentDescription = null,
-                    tint = if (record.healthy) Success else Danger,
+                    tint = accent,
                     modifier = Modifier.size(19.dp)
                 )
             }
@@ -236,10 +251,10 @@ private fun RecordDetailCard(
                 Text(
                     text = "${verdict?.label ?: record.verdict} · ${Formatters.bytes(record.sizeBytes)} · ${Formatters.shortTime(record.checkedAt)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (record.healthy) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                    } else {
-                        if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Color(0xFFFCA5A5) else Color(0xFFB91C1C)
+                    color = when (tone) {
+                        Tone.OK -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        Tone.WARN -> if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Warning else Color(0xFFB45309)
+                        Tone.BAD -> if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Color(0xFFFCA5A5) else Color(0xFFB91C1C)
                     }
                 )
             }

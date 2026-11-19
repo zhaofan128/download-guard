@@ -63,6 +63,8 @@ data class DownloadTask(
     val message: String? = null,
     /** DONE 后的文件绝对路径，供「打开文件」。 */
     val filePath: String? = null,
+    /** FAILED 且文件被隔离时的隔离路径，供「去隔离区」定位。 */
+    val quarantinedPath: String? = null,
     /** 失败时的 HTTP 状态码（0 = 网络层错误）。 */
     val httpCode: Int = 0,
     /** 收尾阶段：校验 / 落盘时 UI 要显示具体动作，而不是干巴巴的 100%。 */
@@ -477,9 +479,13 @@ class DownloadCenter(
                         speed = 0,
                         connections = 0,
                         message = outcome.error ?: "未知错误",
-                        httpCode = outcome.httpCode ?: 0
+                        httpCode = outcome.httpCode ?: 0,
+                        quarantinedPath = outcome.quarantinedPath
                     )
                 }
+                // 校验失败本身就是一条需要留档的结论：不写库的话，
+                // 「校验记录」里永远看不到这次失败，异常统计还会是 0。
+                recordIntegrityFailure(task, outcome)
                 _events.tryEmit("下载失败：${task.fileName}")
             }
         } catch (cancel: CancellationException) {
@@ -499,6 +505,34 @@ class DownloadCenter(
             rt.governor = null
             // 无论哪种结束方式，都补一次调度：并行槽位空出来就让排队的任务上
             tryStartNext()
+        }
+    }
+
+    /**
+     * 校验失败的留档。只有 [DownloadOutcome.integrity] 非空才写——网络中断、403 之类
+     * 还没走到校验环节的失败不是「文件有问题」，不该污染校验记录。
+     */
+    private suspend fun recordIntegrityFailure(task: DownloadTask, outcome: DownloadOutcome) {
+        val integrity = outcome.integrity ?: return
+        val targetPath = outcome.targetPath ?: run {
+            val dir = runCatching { downloader.targetDirectory() }.getOrNull()
+            if (dir != null) File(dir, task.fileName).absolutePath else task.fileName
+        }
+        withContext(Dispatchers.IO) {
+            runCatching {
+                repository.saveResult(
+                    result = integrity,
+                    file = File(targetPath),
+                    source = ResolvedSource(
+                        downloadUrl = task.url,
+                        declaredSize = integrity.declaredSize,
+                        origin = "内置加固下载器（${outcome.connections} 连接）"
+                    ),
+                    quarantinedPath = outcome.quarantinedPath,
+                    displayPath = targetPath,
+                    displayName = task.fileName
+                )
+            }
         }
     }
 
@@ -563,8 +597,9 @@ class DownloadCenter(
             outcome.replacedExisting -> _events.tryEmit("下载完成：${file.name}（已替换旧文件）")
             else -> _events.tryEmit("下载完成：${file.name}")
         }
-        // 插件「完成即打开」：只在真校验通过后触发，失败的文件绝不自动拉起
-        if (policy.autoOpen) {
+        // 插件「完成即打开」：只在真校验通过后触发，失败的文件绝不自动拉起。
+        // BLOCKED 的包系统本来就会拒绝安装，自动拉安装器只会让用户看到一次「应用未安装」。
+        if (policy.autoOpen && integrity.verdict != com.dlguard.integrity.Verdict.BLOCKED) {
             val opened = runCatching {
                 com.dlguard.core.FileOpener.open(context, file.absolutePath)
             }.getOrNull()

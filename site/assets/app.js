@@ -40,7 +40,7 @@
     document.querySelectorAll("[data-site-href]").forEach(function (el) {
       var key = el.getAttribute("data-site-href");
       if (key === "release") el.setAttribute("href", SITE.repo + "/releases/latest");
-      if (key === "apk") el.setAttribute("href", SITE.apkRelease || (SITE.repo + "/releases/tag/v3.4.0"));
+      if (key === "apk") el.setAttribute("href", SITE.apkRelease || (SITE.repo + "/releases/tag/v3.4.3"));
       if (key === "desktop") el.setAttribute("href", SITE.desktopRelease || (SITE.repo + "/releases/latest"));
       if (key === "repo") el.setAttribute("href", SITE.repo);
       if (key === "issues") el.setAttribute("href", SITE.repo + "/issues");

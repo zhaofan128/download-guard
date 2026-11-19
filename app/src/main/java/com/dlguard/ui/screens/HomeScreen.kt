@@ -81,6 +81,7 @@ import com.dlguard.core.LinkSniffer
 import com.dlguard.core.PermissionHelper
 import com.dlguard.data.GuardStats
 import com.dlguard.data.db.CheckRecord
+import com.dlguard.integrity.Tone
 import com.dlguard.integrity.Verdict
 import com.dlguard.service.GuardSnapshot
 import com.dlguard.download.DownloadTask
@@ -105,6 +106,7 @@ import com.dlguard.ui.theme.MonoSmallStyle
 import com.dlguard.ui.theme.Success
 import com.dlguard.ui.theme.Teal300
 import com.dlguard.ui.theme.Violet300
+import com.dlguard.ui.theme.Warning
 import android.widget.Toast
 import kotlinx.coroutines.delay
 
@@ -252,7 +254,8 @@ fun HomeScreen(
                 onClearTasks = viewModel::clearFinishedTasks,
                 onTaskConnections = viewModel::setTaskConnections,
                 onOpenInPage = viewModel::openInSniffer,
-                onOpenFile = fileOpen::open
+                onOpenFile = fileOpen::open,
+                onOpenQuarantine = onOpenSettings
             )
         }
         item {
@@ -874,7 +877,8 @@ private fun DownloadCard(
     onClearTasks: () -> Unit,
     onTaskConnections: (Long, Int) -> Unit,
     onOpenFile: (String) -> Unit,
-    onOpenInPage: (String) -> Unit
+    onOpenInPage: (String) -> Unit,
+    onOpenQuarantine: () -> Unit
 ) {
     val context = LocalContext.current
     GlassCard(contentPadding = PaddingValues(18.dp)) {
@@ -1029,7 +1033,8 @@ private fun DownloadCard(
                 onClearTasks = onClearTasks,
                 onTaskConnections = onTaskConnections,
                 onOpenFile = onOpenFile,
-                onOpenInPage = onOpenInPage
+                onOpenInPage = onOpenInPage,
+                onOpenQuarantine = onOpenQuarantine
             )
         }
     }
@@ -1052,7 +1057,8 @@ private fun TaskListSection(
     onClearTasks: () -> Unit,
     onTaskConnections: (Long, Int) -> Unit,
     onOpenFile: (String) -> Unit,
-    onOpenInPage: (String) -> Unit
+    onOpenInPage: (String) -> Unit,
+    onOpenQuarantine: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1091,7 +1097,8 @@ private fun TaskListSection(
                 onRemoveTask = onRemoveTask,
                 onTaskConnections = onTaskConnections,
                 onOpenFile = onOpenFile,
-                onOpenInPage = onOpenInPage
+                onOpenInPage = onOpenInPage,
+                onOpenQuarantine = onOpenQuarantine
             )
         }
     }
@@ -1121,7 +1128,8 @@ private fun TaskRow(
     onRemoveTask: (Long) -> Unit,
     onTaskConnections: (Long, Int) -> Unit,
     onOpenFile: (String) -> Unit,
-    onOpenInPage: (String) -> Unit
+    onOpenInPage: (String) -> Unit,
+    onOpenQuarantine: () -> Unit
 ) {
     val tint = when (task.phase) {
         TaskPhase.RUNNING -> MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
@@ -1289,6 +1297,11 @@ private fun TaskRow(
                     }
                     TaskPhase.FAILED -> {
                         SmallActionButton("重试") { onResumeTask(task.id) }
+                        // 校验失败的文件已被移入隔离区，给一个直达入口：
+                        // 隔离区在 Android/data 深层目录，让用户自己翻文件管理器基本找不到。
+                        if (!task.quarantinedPath.isNullOrBlank()) {
+                            SmallActionButton("去隔离区") { onOpenQuarantine() }
+                        }
                         // 401/403 是登录态/一次性链接，404/410 是链接失效：
                         // 这些都能靠 WebView 带着真实来源页重新走一遍，比反复重试有用
                         if (task.httpCode in listOf(401, 403, 404, 410)) {
@@ -1472,6 +1485,17 @@ private fun RecordRow(
 ) {
     val healthy = record.healthy
     val verdict = runCatching { Verdict.valueOf(record.verdict) }.getOrNull()
+    val tone = verdict?.tone ?: if (healthy) Tone.OK else Tone.BAD
+    val accent = when (tone) {
+        Tone.OK -> Success
+        Tone.WARN -> Warning
+        Tone.BAD -> Danger
+    }
+    val statusIcon = when (tone) {
+        Tone.OK -> Icons.Filled.Check
+        Tone.WARN -> Icons.Filled.Warning
+        Tone.BAD -> Icons.Filled.Close
+    }
     val canOpen = record.quarantinedPath.isNullOrBlank() && java.io.File(record.filePath).exists()
     GlassCard(
         modifier = modifier.clickable(enabled = canOpen) {
@@ -1484,15 +1508,15 @@ private fun RecordRow(
                 Modifier
                     .size(34.dp)
                     .background(
-                        if (healthy) Success.copy(alpha = 0.16f) else Danger.copy(alpha = 0.16f),
+                        accent.copy(alpha = 0.16f),
                         CircleShape
                     ),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (healthy) Icons.Filled.Check else Icons.Filled.Close,
+                    imageVector = statusIcon,
                     contentDescription = null,
-                    tint = if (healthy) Success else Danger,
+                    tint = accent,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -1509,10 +1533,10 @@ private fun RecordRow(
                 Text(
                     text = "${verdict?.label ?: record.verdict} · ${Formatters.bytes(record.sizeBytes)} · ${Formatters.relative(record.checkedAt)}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (healthy) {
-                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
-                    } else {
-                        if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Color(0xFFFCA5A5) else Color(0xFFB91C1C)
+                    color = when (tone) {
+                        Tone.OK -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f)
+                        Tone.WARN -> if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Warning else Color(0xFFB45309)
+                        Tone.BAD -> if (LocalGlassConfig.current.surfaceAlpha < 0.3f) Color(0xFFFCA5A5) else Color(0xFFB91C1C)
                     },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis

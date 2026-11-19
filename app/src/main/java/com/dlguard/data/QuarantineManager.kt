@@ -7,6 +7,36 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
+ * 隔离文件命名规则。
+ *
+ * 下载器的临时文件叫 `xxx.apk.part`。如果原样搬进隔离区，用户在列表里看到的是
+ * 「xxx.apk.part_20261119-2217」——既认不出是哪个包，也看不出它本来是个 APK。
+ * 所以先剥掉 `.part`，再加时间戳；重名时追加序号。
+ */
+object QuarantineNaming {
+    private const val PART_SUFFIX = ".part"
+
+    fun logicalName(raw: String): String {
+        val trimmed = raw.trim()
+        return if (trimmed.endsWith(PART_SUFFIX, ignoreCase = true)) {
+            trimmed.dropLast(PART_SUFFIX.length).ifBlank { trimmed }
+        } else {
+            trimmed
+        }
+    }
+
+    /** index = 0 表示不带序号；同一时间戳下重名才用 1、2… */
+    fun fileName(sourceName: String, stamp: String, index: Int = 0): String {
+        val safe = Formatters.safeFileName(logicalName(sourceName))
+        val dot = safe.lastIndexOf('.')
+        val base = if (dot > 0) safe.substring(0, dot) else safe
+        val ext = if (dot > 0) safe.substring(dot) else ""
+        val suffix = if (index > 0) "_$index" else ""
+        return "${base}_$stamp$suffix$ext"
+    }
+}
+
+/**
  * 隔离区：/storage/emulated/0/Android/data/<包名>/files/quarantine/
  * 不删除用户文件，保留原名 + 时间戳，便于事后取证或手动恢复。
  */
@@ -25,15 +55,11 @@ class QuarantineManager(private val context: Context) {
         val dir = directory
         if (!dir.exists() && !dir.mkdirs()) return@withContext null
         val stamp = Formatters.timestampForName()
-        val safeName = Formatters.safeFileName(source.name)
-        val dot = safeName.lastIndexOf('.')
-        val base = if (dot > 0) safeName.substring(0, dot) else safeName
-        val ext = if (dot > 0) safeName.substring(dot) else ""
-        var target = File(dir, "${base}_$stamp$ext")
-        var index = 1
+        var index = 0
+        var target = File(dir, QuarantineNaming.fileName(source.name, stamp, index))
         while (target.exists()) {
-            target = File(dir, "${base}_${stamp}_$index$ext")
             index++
+            target = File(dir, QuarantineNaming.fileName(source.name, stamp, index))
         }
         val moved = try {
             source.renameTo(target)

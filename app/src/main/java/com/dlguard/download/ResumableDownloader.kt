@@ -81,7 +81,11 @@ data class DownloadOutcome(
     /** 服务器返回的 HTTP 状态码（网络层失败时为空），供 UI 判断能否「改用网页模式」。 */
     val httpCode: Int? = null,
     /** 落盘时发现同名文件，已用本次结果替换（而不是生成「xxx(1).apk」）。 */
-    val replacedExisting: Boolean = false
+    val replacedExisting: Boolean = false,
+    /** 校验失败时文件被移入隔离区的真实路径；null 表示没移走（还在原地或已清理）。 */
+    val quarantinedPath: String? = null,
+    /** 本应落盘的完整路径（校验失败、文件已被移走时，记录仍要显示这个位置）。 */
+    val targetPath: String? = null
 ) {
     val success: Boolean get() = file != null && error == null
     val averageSpeed: Long
@@ -108,7 +112,12 @@ data class DownloadOutcome(
 class ResumableDownloader(
     private val context: Context,
     private val checker: ApkIntegrityChecker,
-    private val client: OkHttpClient = defaultClient()
+    private val client: OkHttpClient = defaultClient(),
+    /**
+     * 用户显式信任过的文件指纹。与文件监控链路保持一致：命中信任就直接放行，
+     * 不再隔离——否则用户「信任并恢复」过的包，每重下一次都要再隔离一次。
+     */
+    private val trustedStore: com.dlguard.data.TrustedStore? = null
 ) {
 
     /** 收尾阶段防止 CPU 休眠/进程冻结导致「卡在 100%」。 */
@@ -1267,7 +1276,7 @@ class ResumableDownloader(
             )
         )
         // 校验是纯 CPU + IO 的重活，期间没有网络包，系统很容易判定「空闲」把进程冻结
-        val result = keepAwake.holdSuspend("verify") {
+        var result = keepAwake.holdSuspend("verify") {
             // 关键：磁盘上是 xxx.apk.part，但类型判定必须用最终文件名。
             // 少了 logicalName，扩展名会取到 "part"，L4/L5 静默跳过，界面还显示「校验通过」。
             checker.check(
@@ -1277,21 +1286,34 @@ class ResumableDownloader(
             )
         }
         if (!result.healthy) {
-            DownloadMeta.delete(metaFile)
-            // 不要直接删：删掉等于「文件没了、原因也没了」。移入隔离区，用户还能取回比对。
-            val quarantined = runCatching {
-                com.dlguard.data.QuarantineManager(context).quarantine(part)
-            }.getOrNull()
-            val where = when {
-                quarantined != null -> "分片已移入隔离区：${quarantined.absolutePath}"
-                part.exists() -> "分片保留在：${part.absolutePath}"
-                else -> "分片已清理"
+            // 用户信任过的指纹直接放行：与文件监控链路（CheckPipeline）保持同一套规则，
+            // 否则「信任并恢复」过的包每重下一次都会被再隔离一次。
+            val sha = runCatching { com.dlguard.integrity.FileHasher.sha256(part) }.getOrNull()
+            if (sha != null && trustedStore?.isTrusted(part.length(), sha) == true) {
+                result = result.copy(
+                    verdict = com.dlguard.integrity.Verdict.TRUSTED,
+                    detail = "此文件指纹已在信任列表（${sha.take(12)}…），跳过隔离。" +
+                        "原始判定：${result.verdict.label} · ${result.detail}"
+                )
+            } else {
+                DownloadMeta.delete(metaFile)
+                // 不要直接删：删掉等于「文件没了、原因也没了」。移入隔离区，用户还能取回比对。
+                val quarantined = runCatching {
+                    com.dlguard.data.QuarantineManager(context).quarantine(part)
+                }.getOrNull()
+                val where = when {
+                    quarantined != null -> "已移入隔离区（设置 → 隔离区，文件名 ${quarantined.name}）"
+                    part.exists() -> "分片保留在：${part.absolutePath}"
+                    else -> "分片已清理"
+                }
+                return DownloadOutcome(
+                    integrity = result,
+                    error = "下载完成但校验失败：${result.verdict.label} · ${result.detail}。$where",
+                    url = url,
+                    quarantinedPath = quarantined?.absolutePath,
+                    targetPath = File(targetDir, fileName).absolutePath
+                )
             }
-            return DownloadOutcome(
-                integrity = result,
-                error = "下载完成但校验失败：${result.verdict.label} · ${result.detail}。$where",
-                url = url
-            )
         }
         onProgress?.invoke(
             DownloadProgress(
@@ -1349,7 +1371,8 @@ class ResumableDownloader(
             elapsedMs = elapsedMs,
             connections = connections,
             contentType = contentType,
-            replacedExisting = replaced
+            replacedExisting = replaced,
+            targetPath = target.absolutePath
         )
     }
 

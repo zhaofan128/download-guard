@@ -49,7 +49,7 @@ class AppContainer(private val context: Context) {
         GuardRepository(context, database, settings, quarantine)
     }
     val downloader: ResumableDownloader by lazy {
-        ResumableDownloader(context, checker, relayAwareClient)
+        ResumableDownloader(context, checker, relayAwareClient, trustedStore)
     }
 
     /** BT/磁力引擎：独立线程池 + SessionManager，任务状态通过 flow 暴露。 */

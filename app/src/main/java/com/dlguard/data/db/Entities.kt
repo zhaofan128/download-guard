@@ -20,7 +20,8 @@ data class CheckRecord(
     val entriesChecked: Int = 0,
     val elapsedMs: Long = 0
 ) {
-    val healthy: Boolean get() = verdict == "OK" || verdict == "TRUSTED"
+    /** BLOCKED = 字节完好但系统拒装，不算损坏；「异常」只统计真正有问题的记录。 */
+    val healthy: Boolean get() = verdict == "OK" || verdict == "TRUSTED" || verdict == "BLOCKED"
 }
 
 @Entity(tableName = "watched_dirs")

@@ -21,12 +21,12 @@ window.SITE = {
   police: "",
 
   // 以下一般不用改
-  updated: "2026-11-18",
-  version: "3.4.0",
-  versionCode: "36",
+  updated: "2026-11-19",
+  version: "3.4.3",
+  versionCode: "37",
   repo: "https://github.com/zhaofan128/download-guard",
   // APK 固定在 Android 版本，桌面版指向最新发布（两个版本号各自独立，不能共用 latest）
-  apkRelease: "https://github.com/zhaofan128/download-guard/releases/tag/v3.4.0",
+  apkRelease: "https://github.com/zhaofan128/download-guard/releases/tag/v3.4.3",
   desktopRelease: "https://github.com/zhaofan128/download-guard/releases/latest",
   contactHours: "15 个工作日内答复"
 };

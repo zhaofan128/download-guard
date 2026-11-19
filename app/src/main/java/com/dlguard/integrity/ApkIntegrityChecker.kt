@@ -136,13 +136,21 @@ class ApkIntegrityChecker(private val context: Context) {
         // L4 / L5 APK 解析与签名
         if (IntegrityTarget.isInstallerPackage(displayName)) {
             onStage?.invoke("解析 APK 与签名")
-            val probe = if (IntegrityTarget.isSingleApk(displayName)) {
-                probeApk(file)
-            } else {
-                probeContainer(file)
+            val single = IntegrityTarget.isSingleApk(displayName)
+            var probe = if (single) probeApk(file) else probeContainer(file)
+            // 后缀是 .apk、实际却是 .apks/.xapk 容器：顶层没有 AndroidManifest，
+            // 系统解析必然返回 null。按容器重新走一遍，而不是判「文件损坏」。
+            if (single && probe.verdict == Verdict.PARSE_ERROR) {
+                val inner = innerApkEntry(file)
+                if (inner != null) {
+                    val asContainer = probeContainer(file)
+                    if (asContainer.verdict == Verdict.OK || asContainer.verdict == Verdict.BLOCKED) {
+                        probe = asContainer.copy(detail = "实际是分卷容器（含 $inner），不是单个 APK；${asContainer.detail}")
+                    }
+                }
             }
             val schemes = detectSignatureSchemes(file, eocd)
-            if (probe.verdict != Verdict.OK) {
+            if (probe.verdict != Verdict.OK && probe.verdict != Verdict.BLOCKED) {
                 return@withContext finish(
                     probe.verdict,
                     probe.detail,
@@ -154,7 +162,7 @@ class ApkIntegrityChecker(private val context: Context) {
                 )
             }
             // APK 单包：追加 v2 分块摘要 + 验签（v1-only / 算法不支持时如实标注「未验证」）
-            val v2 = if (IntegrityTarget.isSingleApk(displayName)) ApkSignatureVerifier.verify(file, eocd) else null
+            val v2 = if (single) ApkSignatureVerifier.verify(file, eocd) else null
             if (v2 is ApkSignatureVerifier.Result.Failed) {
                 return@withContext finish(
                     Verdict.SIGNATURE_ERROR,
@@ -171,6 +179,18 @@ class ApkIntegrityChecker(private val context: Context) {
                 return@withContext finish(
                     Verdict.SIZE_MISMATCH,
                     "$sizeNote；ZIP 与 APK 结构本身可解析，请核对来源",
+                    entryCheck.entries,
+                    entryCheck.uncompressedBytes,
+                    probe.packageName,
+                    schemeText,
+                    eocd.eocdOffset
+                )
+            }
+            if (probe.verdict == Verdict.BLOCKED) {
+                // 字节层面全部通过，只是系统解析器不收这个包：文件保持原样落地，不进隔离区
+                return@withContext finish(
+                    Verdict.BLOCKED,
+                    "${probe.detail}；签名（$schemeText）",
                     entryCheck.entries,
                     entryCheck.uncompressedBytes,
                     probe.packageName,
@@ -229,7 +249,32 @@ class ApkIntegrityChecker(private val context: Context) {
             )
         }
         if (info == null) {
-            return ApkProbe(Verdict.PARSE_ERROR, "getPackageArchiveInfo() 返回 null，AndroidManifest 无法解析")
+            // 关键分流：PackageManager 返回 null 只代表「系统不收这个包」，不代表字节损坏。
+            // 自己能读出 AndroidManifest 就说明结构完好 —— 绝不把它当损坏文件隔离。
+            val manifest = AndroidManifestProbe.inspect(file)
+            if (manifest.parsed) {
+                val sdkText = buildString {
+                    append("package=${manifest.packageName}")
+                    manifest.minSdk?.let { append("，minSdk=$it") }
+                    manifest.targetSdk?.let { append("，targetSdk=$it") }
+                }
+                val reason = when {
+                    manifest.targetSdk != null && manifest.targetSdk < 23 ->
+                        "Android 14 起禁止安装 targetSdkVersion < 23 的应用，系统解析器因此直接返回 null"
+                    else -> "系统解析器拒绝了这个包（常见于非标准签名或厂商 ROM 的额外限制）"
+                }
+                return ApkProbe(
+                    Verdict.BLOCKED,
+                    "系统 PackageManager 返回 null：$reason。但 ZIP 结构与全部条目 CRC 完整，" +
+                        "AndroidManifest 自解析成功（$sdkText），文件本身未损坏，按原样保留",
+                    manifest.packageName
+                )
+            }
+            return ApkProbe(
+                Verdict.PARSE_ERROR,
+                "getPackageArchiveInfo() 返回 null，自解析 AndroidManifest 也失败" +
+                    "（${manifest.error ?: "未知原因"}），判定为不可用的安装包"
+            )
         }
         if (info.packageName.isNullOrBlank()) {
             return ApkProbe(Verdict.PARSE_ERROR, "解析结果缺少 packageName")
@@ -299,7 +344,7 @@ class ApkIntegrityChecker(private val context: Context) {
                 target.name
             }
             val probe = probeApk(temp)
-            if (probe.verdict != Verdict.OK) {
+            if (probe.verdict != Verdict.OK && probe.verdict != Verdict.BLOCKED) {
                 return probe.copy(detail = "容器内 $extracted：${probe.detail}")
             }
             val tempEocd = (ZipInspector.scanEocd(temp) as? EocdScan.Found)?.info
@@ -326,6 +371,27 @@ class ApkIntegrityChecker(private val context: Context) {
         } finally {
             temp.delete()
         }
+    }
+
+    /**
+     * 后缀写的是 .apk、内容其实是 .apks/.xapk 容器时，顶层没有 AndroidManifest，
+     * 系统解析必然失败。这里只看中央目录，命中 base.apk（或任意 split）就返回条目名。
+     */
+    private fun innerApkEntry(file: File): String? = try {
+        ZipFile(file).use { zip ->
+            val entries = zip.entries()
+            var fallback: String? = null
+            while (entries.hasMoreElements()) {
+                val name = entries.nextElement().name
+                val lower = name.lowercase()
+                if (!lower.endsWith(".apk")) continue
+                if (lower == "base.apk" || lower.endsWith("/base.apk")) return@use name
+                if (fallback == null) fallback = name
+            }
+            fallback
+        }
+    } catch (_: Exception) {
+        null
     }
 
     private fun describeSchemes(schemes: String, v2: ApkSignatureVerifier.Result?): String = buildString {
