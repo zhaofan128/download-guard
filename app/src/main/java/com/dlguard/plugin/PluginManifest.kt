@@ -72,6 +72,17 @@ data class PluginManifest(
         const val CATEGORY_TOOL = "工具"
 
         val CATEGORIES = listOf(CATEGORY_ACCEL, CATEGORY_RESOLVER, CATEGORY_CLOUD, CATEGORY_TOOL)
+
+        private val ID_PATTERN = Regex("[A-Za-z0-9_.-]{2,64}")
+
+        /**
+         * 插件 id 的合法形态。
+         *
+         * id 同时是磁盘目录名（`files/plugins/<id>/`），所以必须挡住 `../`、`/` 与空串：
+         * 一个恶意 zip 只要把 id 写成 `../../databases`，安装逻辑就能删掉/覆盖应用私有
+         * 目录里的任意文件。安装与手动创建两条路径共用这一条规则。
+         */
+        fun isValidId(id: String): Boolean = ID_PATTERN.matches(id)
     }
 }
 

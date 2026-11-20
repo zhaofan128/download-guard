@@ -27,12 +27,15 @@ object FileNameTemplate {
         val ext = if (hasExt) original.substring(dot + 1) else ""
         val date = SimpleDateFormat("yyyyMMdd", Locale.ROOT).format(Date())
         val host = runCatching { java.net.URI(url).host.orEmpty() }.getOrDefault("")
-        return template
+        val out = template
             .replace("{name}", base)
             .replace("{ext}", ext)
             .replace("{host}", host)
             .replace("{date}", date)
             .replace("{rule}", ruleName.orEmpty())
             .trim()
+        // 原文件没有扩展名时，"{name}.{ext}" 会留下一个结尾的点——部分文件管理器
+        // 会把它当成隐藏/异常文件名，直接去掉
+        return if (ext.isEmpty()) out.trimEnd('.') else out
     }
 }

@@ -278,11 +278,12 @@ class DownloadCenter(
                 )
             }.getOrDefault(task.profile)
 
-            // 规则里的并发数 / 文件名模板 / 旁挂校验 / 完成后打开，逐项覆盖全局策略
+            // 规则里的并发数 / 文件名模板 / 旁挂校验 / 完成后打开，逐项覆盖全局策略；
+            // 规则没配的项留空，不能把插件给的全局模板顶掉
             val policy = basePolicy.copy(
                 userAgent = resolved.userAgent ?: basePolicy.userAgent,
                 extraHeaders = resolved.headers,
-                fileNameTemplate = resolved.fileNameTemplate,
+                fileNameTemplate = resolved.fileNameTemplate.ifBlank { basePolicy.fileNameTemplate },
                 sidecarHash = resolved.sidecarHash ?: basePolicy.sidecarHash,
                 autoOpen = resolved.openWhenDone ?: basePolicy.autoOpen
             )

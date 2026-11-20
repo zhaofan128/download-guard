@@ -58,6 +58,7 @@ class PluginManager(
         const val ID_DUAL_STACK = "official.dual-stack"
         const val ID_SIDECAR_HASH = "official.sidecar-hash"
         const val ID_URL_REWRITE = "official.url-rewrite"
+        const val ID_NAME_TEMPLATE = "official.name-template"
 
         private const val UA = "DownloadGuard/1.4 (+https://github.com/dlguard/plugins)"
     }
@@ -320,6 +321,33 @@ class PluginManager(
             config = emptyList()
         ),
         PluginManifest(
+            id = ID_NAME_TEMPLATE,
+            name = "文件名模板",
+            version = "1.0.0",
+            author = "DownloadGuard 官方",
+            description = "按统一模板重命名下载文件：{name} 原名、{ext} 扩展名、{host} 下载域名、" +
+                "{date} 当天日期、{rule} 命中的站点规则名。批量存素材、教程、安装包时，" +
+                "文件名自带日期和来源，过后不用逐个翻。",
+            category = PluginManifest.CATEGORY_TOOL,
+            icon = "🏷️",
+            repo = "dlguard/plugins",
+            changelog = "1.0.0\n· 五个占位符：{name} / {ext} / {host} / {date} / {rule}\n" +
+                "· 站点规则里单独配了模板时，以规则的为准",
+            pinned = true,
+            enabledByDefault = false,
+            config = listOf(
+                PluginConfigField(
+                    key = "template",
+                    label = "文件名模板",
+                    type = PluginConfigField.TYPE_TEXT,
+                    default = "{date}_{name}.{ext}",
+                    description = "例：{date}_{name}.{ext} → 20261120_安装包.apk；" +
+                        "{name}-{host}.{ext} → 安装包-www.example.com.apk。" +
+                        "别漏掉 {ext}，否则文件会没有扩展名。非法字符会被系统清洗。"
+                )
+            )
+        ),
+        PluginManifest(
             id = ID_AUTO_FOLDER,
             name = "自动归档",
             version = "1.0.0",
@@ -521,6 +549,11 @@ class PluginManager(
         } else {
             ""
         }
+        val nameTemplate = if (isEnabled(ID_NAME_TEMPLATE)) {
+            configValue(ID_NAME_TEMPLATE, "template", "").trim()
+        } else {
+            ""
+        }
         return com.dlguard.download.DownloadPolicy(
             speedLimit = limitKb.toLong() * 1024L,
             maxAttempts = attempts,
@@ -530,7 +563,8 @@ class PluginManager(
             autoOpen = isEnabled(ID_AUTO_OPEN),
             userAgent = ua,
             globalBreaker = isEnabled(ID_GLOBAL_BREAKER),
-            sidecarHash = isEnabled(ID_SIDECAR_HASH)
+            sidecarHash = isEnabled(ID_SIDECAR_HASH),
+            fileNameTemplate = nameTemplate
         )
     }
 
@@ -660,7 +694,8 @@ class PluginManager(
             )
         } + pluginDir.listFiles()
             .orEmpty()
-            .filter { it.isDirectory && !it.name.startsWith(".") }
+            // 目录名就是插件 id：旧版本装进来的非法 id（含路径穿越）不再加载
+            .filter { it.isDirectory && !it.name.startsWith(".") && PluginManifest.isValidId(it.name) }
             .mapNotNull { dir ->
                 val manifest = readManifest(File(dir, "manifest.json")) ?: return@mapNotNull null
                 Plugin(
@@ -740,6 +775,10 @@ class PluginManager(
             val raw = String(entries.getValue(manifestEntry), Charsets.UTF_8)
             val manifest = parseManifest(JSONObject(raw)) ?: return "manifest.json 格式不合法（至少需要 id / name）"
             if (manifest.id.isBlank()) return "manifest.json 缺少 id"
+            // id 会拼进 files/plugins/<id>/ 当目录名，必须先挡路径穿越再碰磁盘
+            if (!PluginManifest.isValidId(manifest.id)) {
+                return "插件 id 不合法：${manifest.id}（只允许字母/数字/下划线/点/横线，2~64 位）"
+            }
             if (builtins.any { it.id == manifest.id }) return "插件 id 与官方插件冲突：${manifest.id}"
 
             val dir = installedDir(manifest.id)
@@ -860,7 +899,7 @@ class PluginManager(
             val obj = JSONObject(text)
             val manifest = parseManifest(obj) ?: return "JSON 不合法：至少需要 id 与 name"
             if (builtins.any { it.id == manifest.id }) return "插件 id 与官方插件冲突：${manifest.id}"
-            if (!manifest.id.matches(Regex("[A-Za-z0-9_.-]{2,64}"))) {
+            if (!PluginManifest.isValidId(manifest.id)) {
                 return "id 只能包含字母/数字/下划线/点/横线（2~64 位）"
             }
             val dir = installedDir(manifest.id)
